@@ -44,7 +44,7 @@
 *.ti-*
 # Build tree
 /build*
-
+!/buildScript.sh
 #
 # Top-level generic files
 #

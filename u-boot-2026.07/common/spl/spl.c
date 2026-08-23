@@ -471,7 +471,7 @@ static enum bootstage_id get_bootstage_id(bool start)
 		return start ? BOOTSTAGE_ID_START_SPL : BOOTSTAGE_ID_END_SPL;
 }
 
-static int spl_common_init(bool setup_malloc)
+static int spl_common_init(bool setup_malloc)/* yjrqz-spl3 */
 {
 	int ret;
 
@@ -553,7 +553,7 @@ int spl_early_init(void)
 	return 0;
 }
 
-int spl_init(void)
+int spl_init(void)/* yjrqz-spl2 */
 {
 	int ret;
 	bool setup_malloc = !(IS_ENABLED(CONFIG_SPL_STACK_R) &&
@@ -587,7 +587,7 @@ __weak int spl_check_board_image(struct spl_image_info *spl_image,
 }
 
 static int spl_load_image(struct spl_image_info *spl_image,
-			  struct spl_image_loader *loader)
+			  struct spl_image_loader *loader)/* yjrqz-spl6 */
 {
 	int ret;
 	struct spl_boot_device bootdev;
@@ -595,7 +595,7 @@ static int spl_load_image(struct spl_image_info *spl_image,
 	bootdev.boot_device = loader->boot_device;
 	bootdev.boot_device_name = NULL;
 
-	ret = loader->load_image(spl_image, &bootdev);
+	ret = loader->load_image(spl_image, &bootdev);/* SPL_LOAD_IMAGE_METHOD nor*/
 #ifdef CONFIG_SPL_LEGACY_IMAGE_CRC_CHECK
 	if (!ret && spl_image->dcrc_length) {
 		/* check data crc */
@@ -637,12 +637,12 @@ static int boot_from_devices(struct spl_image_info *spl_image,
 		struct spl_image_loader *loader;
 		int bootdev = spl_boot_list[i];
 
-		if (CONFIG_IS_ENABLED(SHOW_ERRORS))
+		if (CONFIG_IS_ENABLED(SHOW_ERRORS))/*没有使用 */
 			ret = -ENXIO;
 		for (loader = drv; loader != drv + n_ents; loader++) {
 			if (loader && bootdev != loader->boot_device)
 				continue;
-			if (!CONFIG_IS_ENABLED(SILENT_CONSOLE)) {
+			if (!CONFIG_IS_ENABLED(SILENT_CONSOLE)) {/* 走这里*/
 				printf("Trying to boot from %s\n",
 				       spl_loader_name(loader));
 			}
@@ -669,7 +669,7 @@ static int boot_from_devices(struct spl_image_info *spl_image,
 	return ret;
 }
 
-void board_init_r(gd_t *dummy1, ulong dummy2)
+void board_init_r(gd_t *dummy1, ulong dummy2) /* yjrqz-spl4 */
 {
 	u32 spl_boot_list[] = {
 		BOOT_DEVICE_NONE,
@@ -695,8 +695,11 @@ void board_init_r(gd_t *dummy1, ulong dummy2)
 		if (spl_init())
 			hang();
 	}
-	timer_init();
+	timer_init();/* 没有初始化 ，在S文件配置 */
 	if (CONFIG_IS_ENABLED(BLOBLIST)) {
+		/* BLOBLIST 是 U-Boot 里用于在不同启动阶段之间传递少量数据的共享内存机制。
+		没有使用
+		*/
 		ret = bloblist_init();
 		if (ret) {
 			debug("%s: Failed to set up bloblist: ret=%d\n",
@@ -706,6 +709,13 @@ void board_init_r(gd_t *dummy1, ulong dummy2)
 		}
 	}
 	if (CONFIG_IS_ENABLED(HANDOFF)) {
+		/*启动阶段之间的交接数据 
+		SPL 初始化好了 DRAM
+		SPL 得到了某些 SoC/时钟/启动信息
+		然后把这些信息整理成 handoff 数据
+		跳到 U-Boot proper 后，后者继续使用这些数据
+		没有使用
+		*/
 		int ret;
 
 		ret = setup_spl_handoff();
@@ -715,33 +725,33 @@ void board_init_r(gd_t *dummy1, ulong dummy2)
 		}
 	}
 
-	if (CONFIG_IS_ENABLED(SOC_INIT))
+	if (CONFIG_IS_ENABLED(SOC_INIT))/*没有使用 */
 		spl_soc_init();
 
-	if (IS_ENABLED(CONFIG_SPL_WATCHDOG) && CONFIG_IS_ENABLED(WDT))
+	if (IS_ENABLED(CONFIG_SPL_WATCHDOG) && CONFIG_IS_ENABLED(WDT))/*没有使用 */
 		initr_watchdog();
 
 	if (IS_ENABLED(CONFIG_SPL_OS_BOOT) || CONFIG_IS_ENABLED(HANDOFF) ||
-	    IS_ENABLED(CONFIG_SPL_ATF) || IS_ENABLED(CONFIG_SPL_NET))
-		dram_init_banksize();
+	    IS_ENABLED(CONFIG_SPL_ATF) || IS_ENABLED(CONFIG_SPL_NET))/*没有使用 */
+		dram_init_banksize(); /*内存具体分成哪些 bank，每个 bank 在哪里、多大*/
 
-	if (IS_ENABLED(CONFIG_SPL_LMB))
+	if (IS_ENABLED(CONFIG_SPL_LMB))/*Logical Memory Block 管理“哪些内存区域可用、哪些区域已经被占用”*/
 		lmb_init();
 
-	if (CONFIG_IS_ENABLED(PCI) && !(gd->flags & GD_FLG_DM_DEAD)) {
-		ret = pci_init();
+	if (CONFIG_IS_ENABLED(PCI) && !(gd->flags & GD_FLG_DM_DEAD)) {/* Peripheral Component Interconnect，一种外设总线标准 */
+		ret = pci_init();/*没有使用 */
 		if (ret)
 			puts(PHASE_PROMPT "Cannot initialize PCI\n");
 		/* Don't fail. We still can try other boot methods. */
 	}
 
-	if (CONFIG_IS_ENABLED(BOARD_INIT))
+	if (CONFIG_IS_ENABLED(BOARD_INIT))/*没有使用 */
 		spl_board_init();
 
 	bootcount_inc();
 
 	/* Dump driver model states to aid analysis */
-	if (CONFIG_IS_ENABLED(DM_STATS)) {
+	if (CONFIG_IS_ENABLED(DM_STATS)) {/* 没有使用 SPL 阶段的 Driver Model 统计/调试功能*/
 		struct dm_stats mem;
 
 		dm_get_mem(&mem);
@@ -749,10 +759,12 @@ void board_init_r(gd_t *dummy1, ulong dummy2)
 	}
 
 	memset(&spl_image, '\0', sizeof(spl_image));
-	if (IS_ENABLED(CONFIG_SPL_OS_BOOT))
+
+	if (IS_ENABLED(CONFIG_SPL_OS_BOOT))/*没有使用 */
 		spl_image.arg = (void *)SPL_PAYLOAD_ARGS_ADDR;
-	spl_image.boot_device = BOOT_DEVICE_NONE;
-	board_boot_order(spl_boot_list);
+
+	spl_image.boot_device = BOOT_DEVICE_NONE;/*先给一个无效值*/
+	board_boot_order(spl_boot_list); /* 按照配置 写入nor or nand To spl_boot_list[0]*/
 
 	ret = boot_from_devices(&spl_image, spl_boot_list,
 				ARRAY_SIZE(spl_boot_list));

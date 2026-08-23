@@ -10,12 +10,19 @@
 #include <spl.h>
 #include <spl_load.h>
 
-static ulong spl_nor_load_read(struct spl_load_info *load, ulong sector,
-			       ulong count, void *buf)
+static ulong spl_nor_load_read(struct spl_load_info *load, 
+								ulong sector,
+			       				ulong count, 
+								void *buf)  /* yjrqz-spl9 */
 {
 	debug("%s: sector %lx, count %lx, buf %p\n",
 	      __func__, sector, count, buf);
-	memcpy(buf, map_sysmem(sector, count), count);
+	printf("%s: sector %lx, count %lx, buf %p\n",
+	      __func__, sector, count, buf);
+	memcpy(buf, map_sysmem(sector, count), count); 
+	/*走 MT7621 SPI NOR memory-mapped read 模式
+	MT7621 的硬件 SPI 控制器 + 总线地址译码逻辑
+	*/
 
 	return count;
 }
@@ -74,7 +81,7 @@ static int spl_nor_load_image_os(struct spl_image_info *spl_image,
 #endif
 
 static int spl_nor_load_image(struct spl_image_info *spl_image,
-			      struct spl_boot_device *bootdev)
+			      struct spl_boot_device *bootdev) /* yjrqz-spl7 */
 {
 	struct spl_load_info load;
 
@@ -104,6 +111,10 @@ static int spl_nor_load_image(struct spl_image_info *spl_image,
 	 * defined location in SDRAM
 	 */
 	spl_load_init(&load, spl_nor_load_read, NULL, 1);
+	/*
+	spl_nor_get_uboot_base() 返回 U-Boot proper 在 NOR Flash 映射空间里的起始地址
+	U-Boot proper 就是完整的正式版 U-Boot
+	*/
 	return spl_load(spl_image, bootdev, &load, 0, spl_nor_get_uboot_base());
 }
 SPL_LOAD_IMAGE_METHOD("NOR", 0, BOOT_DEVICE_NOR, spl_nor_load_image);

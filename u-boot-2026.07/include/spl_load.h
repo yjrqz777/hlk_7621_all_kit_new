@@ -13,7 +13,7 @@
 static inline int _spl_load(struct spl_image_info *spl_image,
 			    const struct spl_boot_device *bootdev,
 			    struct spl_load_info *info, size_t size,
-			    size_t offset)
+			    size_t offset) /* yjrqz-spl8 */
 {
 	struct legacy_img_hdr *header =
 		spl_get_load_buffer(-sizeof(*header), sizeof(*header));
@@ -21,14 +21,27 @@ static inline int _spl_load(struct spl_image_info *spl_image,
 	int read, ret;
 
 	log_debug("\nloading hdr from %lx to %p\n", (ulong)offset, header);
-	read = info->read(info, offset, ALIGN(sizeof(*header),
-					      spl_get_bl_len(info)), header);
+	printf("\nloading hdr from %lx to %p\n", (ulong)offset, header);
+	/*
+	read = spl_nor_load_read(
+		info,
+		offset,          // NOR Flash 读取地址
+		header大小,      // 要读取多少字节
+		header           // 数据读到这里
+	);
+	*/
+	read = info->read(info, 
+					offset, 
+					ALIGN(sizeof(*header),spl_get_bl_len(info)), 
+					/*把 sizeof(*header) 向上对齐到 spl_get_bl_len(info) 的整数倍。*/
+					header);
+
 	if (read < (int)sizeof(*header))
 		return -EIO;
-
-	if (image_get_magic(header) == FDT_MAGIC) {
+	/*检索 image_set_magic*/
+	if (image_get_magic(header) == FDT_MAGIC) {/*Flattened Device Tree 格式*/
 		log_debug("Found FIT\n");
-		if (CONFIG_IS_ENABLED(LOAD_FIT_FULL)) {
+		if (CONFIG_IS_ENABLED(LOAD_FIT_FULL)) {/*没有使用 */
 			void *buf;
 
 			/*
@@ -50,7 +63,7 @@ static inline int _spl_load(struct spl_image_info *spl_image,
 			return spl_parse_image_header(spl_image, bootdev, buf);
 		}
 
-		if (CONFIG_IS_ENABLED(LOAD_FIT)) {
+		if (CONFIG_IS_ENABLED(LOAD_FIT)) {/*没有使用 */
 			log_debug("Simple loading\n");
 			return spl_load_simple_fit(spl_image, info, offset,
 						   header);
@@ -58,12 +71,15 @@ static inline int _spl_load(struct spl_image_info *spl_image,
 		log_debug("No FIT support\n");
 	}
 
-	if (IS_ENABLED(CONFIG_SPL_LOAD_IMX_CONTAINER) &&
+	if (IS_ENABLED(CONFIG_SPL_LOAD_IMX_CONTAINER) &&/*没有使用 */
 	    valid_container_hdr((void *)header))
 		return spl_load_imx_container(spl_image, info, offset);
 
+	/* LZMA 是一种数据压缩算法，全称 Lempel-Ziv-Markov chain Algorithm 
+		把 U-Boot 镜像压缩，减少 Flash 占用；SPL 加载后再解压到 RAM。
+	*/
 	if (IS_ENABLED(CONFIG_SPL_LZMA) &&
-	    image_get_magic(header) == IH_MAGIC &&
+	    image_get_magic(header) == IH_MAGIC && /* 对应 legacy image */
 	    image_get_comp(header) == IH_COMP_LZMA) {
 		spl_image->flags |= SPL_COPY_PAYLOAD_ONLY;
 		ret = spl_parse_image_header(spl_image, bootdev, header);
@@ -72,7 +88,14 @@ static inline int _spl_load(struct spl_image_info *spl_image,
 
 		return spl_load_legacy_lzma(spl_image, info, offset);
 	}
-
+	/*
+	负责解析普通镜像头，把这些信息填进 spl_image
+	镜像大小
+	加载地址
+	入口地址
+	OS 类型
+	压缩类型
+	*/
 	ret = spl_parse_image_header(spl_image, bootdev, header);
 	if (ret)
 		return ret;

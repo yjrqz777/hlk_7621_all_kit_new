@@ -1,5 +1,5 @@
 ---
-title: HLK-7621-uboot(2026.07)笔记-02
+title: HLK-7621-uboot(2026.07)笔记-03
 date: 2026-08-21 20:30:00
 categories:
   - OpenWrt

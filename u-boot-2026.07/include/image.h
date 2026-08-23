@@ -848,7 +848,7 @@ static inline uint32_t image_get_header_size(void)
 	{ \
 		return uimage_to_cpu(hdr->ih_##f); \
 	}
-image_get_hdr_l(magic)		/* image_get_magic */
+image_get_hdr_l(magic)		/* image_get_magic */ /*检索 image_set_magic*/
 image_get_hdr_l(hcrc)		/* image_get_hcrc */
 image_get_hdr_l(time)		/* image_get_time */
 image_get_hdr_l(size)		/* image_get_size */

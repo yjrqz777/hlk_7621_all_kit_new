@@ -36,7 +36,7 @@ void set_timer_freq_simple(void)
 	gd->arch.timer_freq = rounddown(CONFIG_MT7621_CPU_FREQ, div) * 500000;
 }
 
-void __noreturn board_init_f(ulong dummy)
+void __noreturn board_init_f(ulong dummy)/* yjrqz-spl1 */
 {
 	spl_init();
 
@@ -52,7 +52,7 @@ void __noreturn board_init_f(ulong dummy)
 	board_init_r(NULL, 0);
 }
 
-void board_boot_order(u32 *spl_boot_list)
+void board_boot_order(u32 *spl_boot_list)/* yjrqz-spl5 */
 {
 #ifdef CONFIG_MT7621_BOOT_FROM_NAND
 	spl_boot_list[0] = BOOT_DEVICE_NAND;

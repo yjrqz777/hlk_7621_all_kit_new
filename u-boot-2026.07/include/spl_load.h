@@ -96,7 +96,7 @@ static inline int _spl_load(struct spl_image_info *spl_image,
 	OS 类型
 	压缩类型
 	*/
-	ret = spl_parse_image_header(spl_image, bootdev, header);
+	ret = spl_parse_image_header(spl_image, bootdev, header);/* yjrqz-spl8.1 */
 	if (ret)
 		return ret;
 

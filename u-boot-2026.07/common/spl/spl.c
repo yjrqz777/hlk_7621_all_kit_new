@@ -319,10 +319,10 @@ int spl_parse_image_header(struct spl_image_info *spl_image,
 		if (!ret)
 			return ret;
 	}
-	if (image_get_magic(header) == IH_MAGIC) {
+	if (image_get_magic(header) == IH_MAGIC) {/* 走这里 */
 		int ret;
 
-		ret = spl_parse_legacy_header(spl_image, header);
+		ret = spl_parse_legacy_header(spl_image, header);/* yjrqz-spl8.2 */
 		if (ret)
 			return ret;
 		return 0;
@@ -406,6 +406,9 @@ __weak void __noreturn jump_to_image(struct spl_image_info *spl_image)
 		(image_entry_noargs_t)spl_image->entry_point;
 
 	debug("image entry point: 0x%lx\n", spl_image->entry_point);
+	/* 
+	CONFIG_TEXT_BASE=0x80200000
+	 */
 	image_entry();
 }
 
@@ -647,7 +650,7 @@ static int boot_from_devices(struct spl_image_info *spl_image,
 				       spl_loader_name(loader));
 			}
 
-			ret = spl_load_image(spl_image, loader);
+			ret = spl_load_image(spl_image, loader); /*yjrqz-spl10*/
 			if (!ret) {
 				spl_image->boot_device = bootdev;
 				return 0;
@@ -776,7 +779,7 @@ void board_init_r(gd_t *dummy1, ulong dummy2) /* yjrqz-spl4 */
 			puts(PHASE_PROMPT "failed to boot from all boot devices\n");
 		hang();
 	}
-
+	/*yjrqz-spl11*/
 	spl_perform_arch_fixups(&spl_image);
 	spl_perform_board_fixups(&spl_image);
 
@@ -817,7 +820,7 @@ void board_init_r(gd_t *dummy1, ulong dummy2) /* yjrqz-spl4 */
 	if (ret)
 		debug("Failed to stash bootstage: err=%d\n", ret);
 
-	if (IS_ENABLED(CONFIG_SPL_VIDEO_REMOVE)) {
+	if (IS_ENABLED(CONFIG_SPL_VIDEO_REMOVE)) {/*没有使用 */
 		struct udevice *dev;
 		int rc;
 
@@ -829,13 +832,13 @@ void board_init_r(gd_t *dummy1, ulong dummy2) /* yjrqz-spl4 */
 				       dev->name, rc);
 		}
 	}
-	if (CONFIG_IS_ENABLED(HANDOFF)) {
+	if (CONFIG_IS_ENABLED(HANDOFF)) {/*没有使用 */
 		ret = write_spl_handoff();
 		if (ret)
 			printf(PHASE_PROMPT
 			       "SPL hand-off write failed (err=%d)\n", ret);
 	}
-	if (CONFIG_IS_ENABLED(UPL_OUT) && (gd->flags & GD_FLG_UPL)) {
+	if (CONFIG_IS_ENABLED(UPL_OUT) && (gd->flags & GD_FLG_UPL)) {/*没有使用 */
 		ret = spl_write_upl_handoff(&spl_image);
 		if (ret) {
 			printf(PHASE_PROMPT
@@ -843,7 +846,7 @@ void board_init_r(gd_t *dummy1, ulong dummy2) /* yjrqz-spl4 */
 			hang();
 		}
 	}
-	if (CONFIG_IS_ENABLED(BLOBLIST)) {
+	if (CONFIG_IS_ENABLED(BLOBLIST)) {/*没有使用 */
 		ret = bloblist_finish();
 		if (ret)
 			printf("Warning: Failed to finish bloblist (ret=%d)\n",
@@ -852,7 +855,7 @@ void board_init_r(gd_t *dummy1, ulong dummy2) /* yjrqz-spl4 */
 
 	spl_board_prepare_for_boot();
 
-	if (CONFIG_IS_ENABLED(RELOC_LOADER)) {
+	if (CONFIG_IS_ENABLED(RELOC_LOADER)) {/*没有使用 */
 		int ret;
 
 		ret = spl_reloc_jump(&spl_image, jumper);

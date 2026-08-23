@@ -33,7 +33,7 @@ static void spl_parse_legacy_validate(ulong start, ulong size)
 }
 
 int spl_parse_legacy_header(struct spl_image_info *spl_image,
-			    const struct legacy_img_hdr *header)
+			    const struct legacy_img_hdr *header)/* yjrqz-spl8.3 */
 {
 	u32 header_size = sizeof(struct legacy_img_hdr);
 
@@ -53,6 +53,10 @@ int spl_parse_legacy_header(struct spl_image_info *spl_image,
 		spl_image->load_addr = image_get_load(header);
 		spl_image->entry_point = image_get_ep(header);
 		spl_image->size = image_get_data_size(header);
+		printf("load=0x%lx entry=0x%lx size=0x%lx\n",
+			spl_image->load_addr,
+			spl_image->entry_point,
+			spl_image->size);
 	} else {
 		spl_image->entry_point = image_get_ep(header);
 		/* Load including the header */

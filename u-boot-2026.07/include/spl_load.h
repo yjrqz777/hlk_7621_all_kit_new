@@ -21,7 +21,7 @@ static inline int _spl_load(struct spl_image_info *spl_image,
 	int read, ret;
 
 	log_debug("\nloading hdr from %lx to %p\n", (ulong)offset, header);
-	printf("\nloading hdr from %lx to %p\n", (ulong)offset, header);
+	// printf("\nloading hdr from %lx to %p\n", (ulong)offset, header);
 	/*
 	read = spl_nor_load_read(
 		info,

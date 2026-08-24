@@ -141,7 +141,7 @@ static int print_resetinfo(void)
 		}
 
 		if (!sysreset_get_status(dev, status, sizeof(status))) {
-			printf("%s%s", status_printed ? " " : "", status);
+			printf("--%s%s--", status_printed ? " " : "", status);
 			status_printed = true;
 		}
 	}

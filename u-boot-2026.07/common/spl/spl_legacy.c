@@ -53,10 +53,10 @@ int spl_parse_legacy_header(struct spl_image_info *spl_image,
 		spl_image->load_addr = image_get_load(header);
 		spl_image->entry_point = image_get_ep(header);
 		spl_image->size = image_get_data_size(header);
-		printf("load=0x%lx entry=0x%lx size=0x%lx\n",
-			spl_image->load_addr,
-			spl_image->entry_point,
-			spl_image->size);
+		// printf("load=0x%lx entry=0x%lx size=0x%lx\n",/* YJRQZ */
+		// 	spl_image->load_addr,
+		// 	spl_image->entry_point,
+		// 	spl_image->size);
 	} else {
 		spl_image->entry_point = image_get_ep(header);
 		/* Load including the header */

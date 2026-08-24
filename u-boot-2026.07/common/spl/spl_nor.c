@@ -17,8 +17,8 @@ static ulong spl_nor_load_read(struct spl_load_info *load,
 {
 	debug("%s: sector %lx, count %lx, buf %p\n",
 	      __func__, sector, count, buf);
-	printf("%s: sector %lx, count %lx, buf %p\n",
-	      __func__, sector, count, buf);
+	// printf("%s: sector %lx, count %lx, buf %p\n",/* YJRQZ */
+	//       __func__, sector, count, buf);
 	memcpy(buf, map_sysmem(sector, count), count); 
 	/*走 MT7621 SPI NOR memory-mapped read 模式
 	MT7621 的硬件 SPI 控制器 + 总线地址译码逻辑

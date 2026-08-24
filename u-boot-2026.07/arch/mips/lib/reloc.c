@@ -123,11 +123,18 @@ void relocate_code(ulong start_addr_sp, gd_t *new_gd, ulong relocaddr)
 	off = relocaddr - (unsigned long)__text_start;
 	if (off & 0xffff)
 		panic("Mis-aligned relocation\n");
-
+	/* 调试输出：打印关键变量 */
+	printf("=== Relocation Debug Info ===\n");
+	printf("start_addr_sp: 0x%08lx\n", start_addr_sp);
+	printf("new_gd:        0x%08lx\n", (ulong)new_gd);
+	printf("relocaddr:     0x%08lx\n", relocaddr);
+	printf("__text_start:  0x%08lx\n", (ulong)__text_start);
+	printf("__image_copy_end: 0x%08lx\n", (ulong)__image_copy_end);
+	printf("off:           0x%08lx\n", off);
+	printf("============================\n");
 	/* Copy U-Boot to RAM */
 	length = __image_copy_end - __text_start;
 	memcpy((void *)relocaddr, __text_start, length);
-
 	/* Now apply relocations to the copy in RAM */
 	buf = __rel_start;
 	addr = relocaddr;

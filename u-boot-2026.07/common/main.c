@@ -46,7 +46,7 @@ void main_loop(void)
 
 	bootstage_mark_name(BOOTSTAGE_ID_MAIN_LOOP, "main_loop");
 
-	if (IS_ENABLED(CONFIG_VERSION_VARIABLE))
+	if (IS_ENABLED(CONFIG_VERSION_VARIABLE)) /* 没有使用*/
 		env_set("ver", version_string);  /* set version variable */
 
 	cli_init();

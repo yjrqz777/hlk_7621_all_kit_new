@@ -21,6 +21,23 @@
 	chosen {
 		stdout-path = &uart0;
 	};
+
+	leds { /* BOOT LED*/
+		compatible = "gpio-leds";
+
+		boot_led: led-boot {
+			label = "boot";
+			gpios = <&gpio0 13 1>; /* JTDO 1 = 低电平有效 */
+		};
+	};
+
+	options {
+		u-boot {
+			compatible = "u-boot,config";
+			boot-led = <&boot_led>;
+			boot-led-period-ms = <250>;   /* 闪烁周期,可选 */
+		};
+	};
 };
 
 &pinctrl {
@@ -37,7 +54,7 @@
 
 		jtag {
 			groups = "jtag";
-			function = "jtag";
+			function = "gpio"; /* GPIO 模式 */
 		};
 	};
 };

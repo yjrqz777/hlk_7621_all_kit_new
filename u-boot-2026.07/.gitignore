@@ -43,7 +43,16 @@
 *.tab.[ch]
 *.ti-*
 # Build tree
-/build*
+# 忽略 build 目录的所有内容
+/build/*
+
+# 保留 build 目录本身
+!/build/
+
+# 保留 .config 文件
+!/build/.config
+
+# 保留脚本文件
 !/buildScript.sh
 #
 # Top-level generic files

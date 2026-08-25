@@ -58,7 +58,7 @@
 		};
 
 		stage_bin {
-			filename = "mt7621_stage_sram.bin";
+			filename = "mt7621_stage_sram_noprint.bin";
 			type = "blob-ext";
 		};
 	};

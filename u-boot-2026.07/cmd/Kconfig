@@ -2281,12 +2281,13 @@ config CMD_TFTPBOOT
 
 config CMD_WEBFLASH
 	bool "webflash"
-	depends on NET_LWIP
+	depends on NET_LWIP && SPI_FLASH && LEGACY_IMAGE_FORMAT
 	select PROT_TCP_LWIP
 	help
-	  Start a small HTTP recovery server using the lwIP raw TCP API.
-	  The first implementation accepts an OpenWrt firmware upload into
-	  RAM only; it does not erase or write flash.
+	  Start the YJRQZ Boot HTTP recovery server using the lwIP raw TCP
+	  API. It validates OpenWrt images, updates protected SPI-NOR regions,
+	  verifies writes, backs up partitions and manages selected environment
+	  variables.
 
 if CMD_WEBFLASH
 
@@ -2294,9 +2295,7 @@ config WEBFLASH_FIRMWARE_OFFSET
 	hex "Firmware partition offset"
 	default 0x50000
 	help
-	  Start offset of the firmware partition in SPI flash. This value is
-	  reported by the recovery page but is not written in RAM-upload-only
-	  mode.
+	  Start offset of the firmware partition in SPI flash.
 
 config WEBFLASH_FIRMWARE_SIZE
 	hex "Firmware partition size"
@@ -2308,8 +2307,37 @@ config WEBFLASH_DEVICE_ID
 	string "Expected OpenWrt device ID"
 	default "hilink,hlk-7621a-evb"
 	help
-	  OpenWrt supported-device identifier expected by the future image
-	  validation and flash-writing stage.
+	  OpenWrt supported-device identifier required in sysupgrade metadata.
+
+config WEBFLASH_PRODUCT_NAME
+	string "Recovery console product name"
+	default "YJRQZ Boot"
+	help
+	  Product name displayed by the recovery Web console.
+
+config WEBFLASH_UBOOT_OFFSET
+	hex "U-Boot partition offset"
+	default 0x0
+
+config WEBFLASH_UBOOT_SIZE
+	hex "U-Boot partition size"
+	default 0x30000
+
+config WEBFLASH_ENV_OFFSET
+	hex "U-Boot environment partition offset"
+	default 0x30000
+
+config WEBFLASH_ENV_SIZE
+	hex "U-Boot environment partition size"
+	default 0x10000
+
+config WEBFLASH_FACTORY_OFFSET
+	hex "Factory/calibration partition offset"
+	default 0x40000
+
+config WEBFLASH_FACTORY_SIZE
+	hex "Factory/calibration partition size"
+	default 0x10000
 
 config WEBFLASH_DEFAULT_IPADDR
 	string "Default Web recovery IP address"

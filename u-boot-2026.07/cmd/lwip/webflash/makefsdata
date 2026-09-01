@@ -30,14 +30,27 @@ if [ -z "$yui_jar" ]; then
 	done
 fi
 
-tr -d '\t\r\n' < "$html_file" > "$tmp_dir/index.html"
-
 if [ -n "$yui_jar" ] && [ -f "$yui_jar" ] && command -v java >/dev/null 2>&1; then
 	java -jar "$yui_jar" --type css --charset utf-8 "$css_file" \
 		> "$tmp_dir/style.css"
 else
 	tr -d '\t\r\n' < "$css_file" > "$tmp_dir/style.css"
 fi
+
+# Keep the recovery page self-contained. The server deliberately accepts one
+# TCP client at a time, so an early parallel stylesheet request could otherwise
+# race the still-streaming HTML response.
+awk -v css_file="$tmp_dir/style.css" '
+	/<link rel="stylesheet" href="\/style.css">/ {
+		print "<style>"
+		while ((getline css < css_file) > 0)
+			print css
+		close(css_file)
+		print "</style>"
+		next
+	}
+	{ print }
+' "$html_file" | tr -d '\t\r\n' > "$tmp_dir/index.html"
 
 emit_array()
 {
@@ -69,6 +82,5 @@ cat <<'EOF'
 EOF
 
 emit_array webflash_index_html "$tmp_dir/index.html"
-emit_array webflash_style_css "$tmp_dir/style.css"
 
 echo '#endif /* __WEBFLASH_ASSETS_H */'

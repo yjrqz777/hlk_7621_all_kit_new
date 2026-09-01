@@ -18,17 +18,19 @@ tags:
 - 默认地址：`192.168.31.66/24`。
 - 默认上传地址：`0x83000000`。
 - 最大上传大小：`0x1fb0000`（33226752 字节，对应 firmware 分区大小）。
-- 当前阶段只上传到 RAM，不擦除、不写入 Flash。
-- 上传成功后自动设置环境变量 `fileaddr` 和 `filesize`。
-- 2026-09-01 验证的 `build/u-boot-mt7621.bin` 大小为 185585 字节，小于 U-Boot 分区上限 192 KiB（196608 字节）。
+- 后台名称为 `YJRQZ Boot`，支持固件更新、回读校验、分区备份、白名单环境变量编辑和高级原始分区恢复。
+- OpenWrt 固件上传完成后先在 RAM 中校验 uImage、CRC、fwtool 元数据及设备 ID；校验通过并二次确认后才修改 Flash。
+- 固件写入按擦除、写入、回读 CRC 三阶段执行，完成后延时 5 秒自动重启。
+- 普通固件更新不会写入 U-Boot、环境和 Factory；危险分区恢复要求等长备份、格式检查和目标专用确认口令。
 
 启动服务：
 
 ```text
 => webflash
-Web recovery listening on http://192.168.31.66/
-Upload address: 0x83000000, maximum size: 0x1fb0000
-RAM upload only; Flash writes are disabled. Press Ctrl-C to stop.
+YJRQZ Boot listening on http://192.168.31.66/
+SPI NOR: 33554432 bytes, erase size: 65536 bytes
+Normal recovery protects U-Boot, environment and factory data.
+Press Ctrl-C to stop.
 ```
 
 只有执行 `webflash` 并停留在其轮询循环中，网页才可以访问；出现 `=>` 提示符时表示网页服务没有运行。
@@ -123,7 +125,7 @@ Web acknowledged: 342 bytes, 0 remaining
 
 浏览器请求 `/favicon.ico` 返回 `404 Not Found` 只是没有提供网页图标，不影响页面和上传功能。
 
-# 4 上传镜像并从 RAM 启动 OpenWrt
+# 4 从 RAM 临时启动 OpenWrt
 
 用于 RAM 启动的镜像：
 
@@ -131,17 +133,10 @@ Web acknowledged: 342 bytes, 0 remaining
 openwrt-ramips-mt7621-hilink_hlk-7621a-evb-initramfs-kernel.bin
 ```
 
-本次验证的镜像大小为 8417175 字节。网页上传成功日志：
+新版 YJRQZ Boot 网页只接受带目标设备 fwtool 元数据的 squashfs sysupgrade 镜像，因此会主动拒绝 initramfs。临时 RAM 启动继续使用 TFTP：
 
 ```text
-Web upload complete: 8417175 bytes at 0x83000000 (Flash unchanged)
-```
-
-上传完成后：
-
-```text
-# 串口按 Ctrl-C 退出 webflash，RAM 内容仍然保留
-=> printenv fileaddr filesize
+=> tftpboot ${loadaddr} openwrt-ramips-mt7621-hilink_hlk-7621a-evb-initramfs-kernel.bin
 => iminfo ${fileaddr}
 => bootm ${fileaddr}
 ```
@@ -249,4 +244,3 @@ uci commit dhcp
 ```
 
 `192.168.31.66` 必须确认没有被主路由器 DHCP 分配给其他设备。
-

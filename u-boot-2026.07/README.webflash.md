@@ -13,12 +13,12 @@ target/linux/ramips/dts/mt7621_hilink_hlk-7621a-evb.dts
 
 SPI NOR 总容量为 32 MiB，地址范围为 `0x000000`～`0x1ffffff`。
 
-| 分区 | 起始地址 | 大小 | 结束地址（不包含） | Web 刷机权限 |
+| 分区 | 起始地址 | 大小 | 结束地址（不包含） | YJRQZ Boot 策略 |
 |---|---:|---:|---:|---|
-| U-Boot | `0x000000` | `0x030000`（192 KiB） | `0x030000` | 禁止写入 |
-| U-Boot 环境 | `0x030000` | `0x010000`（64 KiB） | `0x040000` | 禁止写入 |
-| Factory | `0x040000` | `0x010000`（64 KiB） | `0x050000` | 禁止写入 |
-| Firmware | `0x050000` | `0x1fb0000`（32448 KiB） | `0x2000000` | 允许写入 |
+| U-Boot | `0x000000` | `0x030000`（192 KiB） | `0x030000` | 默认保护；仅允许等长备份恢复和专用口令确认 |
+| U-Boot 环境 | `0x030000` | `0x010000`（64 KiB） | `0x040000` | 白名单编辑；原始恢复需 CRC、等长文件和专用口令 |
+| Factory | `0x040000` | `0x010000`（64 KiB） | `0x050000` | 默认保护；仅允许等长、非空备份恢复和专用口令确认 |
+| Firmware | `0x050000` | `0x1fb0000`（32448 KiB） | `0x2000000` | 校验设备型号后允许更新 |
 
 Factory 分区内的无线 EEPROM 位于 Factory 分区偏移 `0x8000`，即绝对地址：
 
@@ -26,7 +26,7 @@ Factory 分区内的无线 EEPROM 位于 Factory 分区偏移 `0x8000`，即绝�
 0x048000～0x0481ff
 ```
 
-该区域包含无线校准数据，任何情况下都不能由 Web 刷机功能擦除或覆盖。
+该区域包含无线校准数据。普通固件更新、清除 OpenWrt 配置和环境变量操作都不会擦除或覆盖它；高级恢复仅用于写回本机已验证的完整 Factory 备份。
 
 ## U-Boot 大小限制
 
@@ -44,9 +44,9 @@ U-Boot 分区大小固定为：
 test "$(stat -c %s build/u-boot-mt7621.bin)" -le 196608
 ```
 
-## Web 刷机目标
+## 安全模型
 
-Web 刷机只允许更新 Firmware 分区：
+正常更新只允许写 Firmware 分区：
 
 ```c
 #define WEBFLASH_FIRMWARE_OFFSET  0x00050000
@@ -64,7 +64,7 @@ offset + size >= offset; /* 防止整数溢出 */
 offset + size <= WEBFLASH_FLASH_END;
 ```
 
-第一版 Web 刷机功能不得提供 U-Boot、U-Boot 环境或 Factory 分区的更新入口。
+U-Boot、环境和 Factory 的原始写入只放在“高级功能”中，并同时要求：目标分区等长文件、目标特有的基础格式检查、页面二次确认以及 HTTP 确认口令。建议在任何高级写入前先下载 Factory 和 Full Flash 备份。
 
 ## 可接受的 OpenWrt 镜像
 
@@ -76,13 +76,13 @@ openwrt-ramips-mt7621-hilink_hlk-7621a-evb-squashfs-sysupgrade.bin
 
 该镜像应从 Flash 偏移 `0x50000` 开始写入。
 
-当前检查过的示例镜像：
+当前实际检查过的示例镜像：
 
 ```text
 OpenWrt 版本：24.10.8
 目标平台：ramips/mt7621
 设备：hilink,hlk-7621a-evb
-文件大小：8717389 bytes
+文件大小：8782925 bytes
 ```
 
 以下 initramfs 镜像仅用于加载到 RAM 后临时启动，不能作为 Web 刷机镜像写入 Firmware 分区：
@@ -138,14 +138,22 @@ openwrt-ramips-mt7621-hilink_hlk-7621a-evb-initramfs-kernel.bin
 
 ## HTTP 功能范围
 
-为了控制 U-Boot 总大小，建议基于现有 lwIP Raw TCP API 实现最小 HTTP 服务，只支持：
+服务基于 lwIP Raw TCP API，使用单连接、`Content-Length` 和 `Connection: close`。页面资源内嵌，不依赖互联网。当前接口为：
 
 ```text
 GET  /
 GET  /api/info
-POST /api/upload
+GET  /api/job
+GET  /api/env
+GET  /api/backup/{uboot,environment,factory,firmware,fullflash}
+POST /api/upload/{firmware,uboot,environment,factory}
+POST /api/flash
+POST /api/factory-reset
+POST /api/env
+POST /api/env/reset
+POST /api/reboot
 ```
 
-上传正文使用 `application/octet-stream`，不实现 multipart、HTTPS、CGI、SSI、目录浏览、HTTP keep-alive 或 chunked encoding。
+上传正文使用 `application/octet-stream`，不实现 multipart、HTTPS、CGI、SSI、目录浏览、HTTP keep-alive 或 chunked encoding。刷写任务按“擦除、写入、回读 CRC”三阶段执行，成功后延时 5 秒重启。
 
 Web 服务只应在用户主动执行恢复命令或按住物理恢复按键时启动，不应在正常启动流程中长期开放。

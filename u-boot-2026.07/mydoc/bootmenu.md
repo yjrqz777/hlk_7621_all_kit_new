@@ -157,6 +157,14 @@ CONFIG_ENV_OFFSET=0x30000
 CONFIG_ENV_SECT_SIZE=0x10000
 ```
 
+当前菜单默认项为屏幕上的 `0. Exit`。由于 Exit 在内部是继两个功能项之后的第 3 项，环境变量使用：
+
+```text
+bootmenu_default=2
+```
+
+倒计时结束会退出菜单并进入 U-Boot 命令行；倒计时期间按任意普通键会停止自动选择，并停留在默认的 Exit 项。
+
 如果使用 `menuconfig` 修改了 `build/.config`，应同步生成或更新 defconfig，避免清理构建目录后丢失配置：
 
 ```bash

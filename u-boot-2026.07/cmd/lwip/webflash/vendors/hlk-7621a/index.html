@@ -1,79 +1,277 @@
 <!DOCTYPE HTML>
-<html>
+<html lang="zh-CN">
 	<head>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width,initial-scale=1">
-		<title>HLK-7621A firmware update</title>
+		<title>YJRQZ Boot</title>
 		<link rel="stylesheet" href="/style.css">
 	</head>
 	<body>
-		<div id="m">
-			<h1>FIRMWARE UPDATE</h1>
-			<p>Select the OpenWrt sysupgrade image for <strong>HLK-7621A</strong> and upload it to RAM.</p>
-			<div id="device" class="i">Loading device information...</div>
-			<form id="upload">
-				<input id="firmware" type="file" name="firmware" required>
-				<input type="submit" value="Upload firmware">
-			</form>
-			<progress id="progress" value="0" max="100"></progress>
-			<div id="status" class="i">Flash is not modified by this upload stage.</div>
-			<div class="i w">
-				<strong>WARNINGS</strong>
-				<ul>
-					<li>choose firmware built for hilink,hlk-7621a-evb</li>
-					<li>do not power off the device during recovery</li>
-					<li>the current implementation uploads to RAM only</li>
-				</ul>
-			</div>
+		<header>
+			<div class="brand"><span class="mark">Y</span><div><strong id="product">YJRQZ Boot</strong><small>Boot &amp; Recovery Console</small></div></div>
+			<div id="online" class="pill">正在连接设备</div>
+		</header>
+		<div class="shell">
+			<nav>
+				<button class="active" data-view="overview">设备信息</button>
+				<button data-view="firmware">固件更新</button>
+				<button data-view="backup">Flash 备份</button>
+				<button data-view="environment">环境变量</button>
+				<button data-view="advanced">高级功能</button>
+			</nav>
+			<main>
+				<section id="overview" class="view active">
+					<div class="title"><div><h1>设备信息</h1><p>HLK-7621A 启动与恢复环境</p></div><button id="refresh" class="secondary">刷新</button></div>
+					<div class="cards">
+						<div class="card"><span>设备型号</span><strong id="device">—</strong></div>
+						<div class="card"><span>管理地址</span><strong id="ip">—</strong></div>
+						<div class="card"><span>SPI NOR</span><strong id="flashSize">—</strong></div>
+						<div class="card"><span>U-Boot</span><strong id="version">—</strong></div>
+					</div>
+					<div class="panel"><h2>Flash 分区</h2><div class="table"><table><thead><tr><th>分区</th><th>偏移</th><th>大小</th><th>策略</th></tr></thead><tbody id="partitions"></tbody></table></div></div>
+					<div class="notice good">普通固件更新只会操作 firmware 分区，U-Boot、环境变量和无线校准数据默认受保护。</div>
+				</section>
+
+				<section id="firmware" class="view">
+					<div class="title"><div><h1>固件更新</h1><p>仅接受适用于 hilink,hlk-7621a-evb 的 OpenWrt sysupgrade 镜像</p></div></div>
+					<div class="panel">
+						<h2>1. 上传并验证镜像</h2>
+						<div class="fileline"><input id="firmwareFile" type="file" accept=".bin"><button id="firmwareUpload">上传镜像</button></div>
+						<progress id="firmwareProgress" value="0" max="100"></progress>
+						<div id="firmwareStatus" class="status">尚未选择固件。上传阶段不会修改 Flash。</div>
+					</div>
+					<div class="panel danger-zone">
+						<h2>2. 写入 firmware 分区</h2>
+						<p>系统将依次擦除固件区、写入镜像并回读校验。操作成功后设备将在 5 秒内自动重启。</p>
+						<button id="firmwareFlash" class="danger" disabled>开始更新固件</button>
+					</div>
+					<div id="jobBox" class="panel job hidden"><div class="jobhead"><strong id="jobPhase">等待任务</strong><span id="jobPercent">0%</span></div><progress id="jobProgress" value="0" max="100"></progress><p id="jobDetail"></p></div>
+					<div class="notice warning">刷写期间不要断电、拔网线或关闭页面。写入失败时不要重启，保持设备上电并查看串口信息。</div>
+				</section>
+
+				<section id="backup" class="view">
+					<div class="title"><div><h1>Flash 备份</h1><p>直接从 SPI NOR 分块读取并下载到电脑</p></div></div>
+					<div class="backup-grid">
+						<a href="/api/backup/firmware"><strong>Firmware</strong><span>OpenWrt 固件分区</span><em>下载备份</em></a>
+						<a href="/api/backup/factory"><strong>Factory</strong><span>MAC 与无线校准数据</span><em>优先备份</em></a>
+						<a href="/api/backup/uboot"><strong>U-Boot</strong><span>当前引导程序分区</span><em>下载备份</em></a>
+						<a href="/api/backup/environment"><strong>Environment</strong><span>原始环境变量分区</span><em>下载备份</em></a>
+						<a href="/api/backup/fullflash"><strong>Full Flash</strong><span>完整 SPI NOR 镜像</span><em>下载 32 MiB</em></a>
+					</div>
+					<div class="notice warning">Factory 备份包含本机唯一的校准信息。建议首次使用时同时保存 Factory 和 Full Flash，并保留多个副本。</div>
+				</section>
+
+				<section id="environment" class="view">
+					<div class="title"><div><h1>环境变量</h1><p>只开放网络参数和启动等待时间</p></div><button id="envReload" class="secondary">重新读取</button></div>
+					<form id="envForm" class="panel formgrid">
+						<label>设备 IP<input id="envIp" name="ipaddr" maxlength="15" required></label>
+						<label>子网掩码<input id="envMask" name="netmask" maxlength="15" required></label>
+						<label>TFTP 服务器 IP<input id="envServer" name="serverip" maxlength="15" placeholder="可留空"></label>
+						<label>启动等待时间（0–30 秒）<input id="envDelay" name="bootdelay" type="number" min="0" max="30" required></label>
+						<div class="wide"><button type="submit">保存环境变量</button></div>
+						<div id="envStatus" class="status wide">修改管理 IP 后需重启才能生效。</div>
+					</form>
+					<div class="panel danger-zone"><h2>恢复默认引导环境</h2><p>恢复编译进 U-Boot 的默认变量，包括启动命令和恢复按键配置。</p><button id="envReset" class="danger">恢复默认环境</button></div>
+				</section>
+
+				<section id="advanced" class="view">
+					<div class="title"><div><h1>高级功能</h1><p>危险操作，仅用于已有可靠备份的设备恢复</p></div></div>
+					<div class="panel danger-zone">
+						<h2>原始分区恢复</h2>
+						<p>只接受由本后台下载的等长原始备份。请先选择目标，再上传对应文件。</p>
+						<div class="formgrid">
+							<label>目标分区<select id="rawTarget"><option value="factory">Factory（65536 字节）</option><option value="environment">Environment（65536 字节）</option><option value="uboot">U-Boot（196608 字节）</option></select></label>
+							<label>原始备份文件<input id="rawFile" type="file" accept=".bin"></label>
+							<div class="wide actions"><button id="rawUpload">上传并验证</button><button id="rawRestore" class="danger" disabled>写入所选分区</button></div>
+							<label class="wide">确认口令<input id="rawConfirm" autocomplete="off" placeholder="RESTORE-FACTORY / RESTORE-ENVIRONMENT / RESTORE-UBOOT"></label>
+							<progress id="rawProgress" class="wide" value="0" max="100"></progress>
+							<div id="rawStatus" class="status wide">写错 U-Boot 或 Factory 可能导致设备无法启动或无线功能永久异常。</div>
+						</div>
+					</div>
+					<div class="panel danger-zone"><h2>清除 OpenWrt 配置</h2><p>自动定位 SquashFS 末尾，只擦除 rootfs_data/overlay 区域，保留内核、只读根文件系统和前三个保护分区。</p><button id="factoryReset" class="danger">清除配置并重启</button></div>
+					<div class="panel"><h2>重新启动</h2><p>退出恢复环境并按当前启动配置启动系统。</p><button id="reboot">立即重启设备</button></div>
+				</section>
+			</main>
 		</div>
-		<div id="f">HLK-7621A U-Boot Web Recovery</div>
+		<footer>YJRQZ Boot · HLK-7621A Web Recovery</footer>
 		<script>
-			(function () {
-				var device = document.getElementById('device');
-				var form = document.getElementById('upload');
-				var file = document.getElementById('firmware');
-				var progress = document.getElementById('progress');
-				var status = document.getElementById('status');
+		(function () {
+			'use strict';
+			var info;
+			var firmwareReady = false;
+			var rawReady = false;
+			var jobTimer;
+			var phaseNames = {idle:'等待',erasing:'正在擦除 Flash',writing:'正在写入 Flash',verifying:'正在回读校验',done:'操作完成，设备即将重启',error:'操作失败'};
 
-				fetch('/api/info').then(function (response) {
-					return response.json();
-				}).then(function (info) {
-					device.textContent = 'Device: ' + info.device +
-						' | U-Boot: ' + info.version +
-						' | IP: ' + info.ip +
-						' | Maximum upload: ' + info.max_upload + ' bytes';
-				}).catch(function () {
-					device.textContent = 'Unable to read device information.';
+			function el(id) { return document.getElementById(id); }
+			function bytes(n) { return n >= 1048576 ? (n / 1048576).toFixed(2) + ' MiB' : n >= 1024 ? (n / 1024).toFixed(0) + ' KiB' : n + ' B'; }
+			function hex(n) { var s = Number(n).toString(16); while (s.length < 8) s = '0' + s; return '0x' + s; }
+			function status(node, text, kind) { node.textContent = text; node.className = 'status' + (kind ? ' ' + kind : ''); }
+			function parse(text) { try { return JSON.parse(text); } catch (e) { return {ok:false,error:text || '设备返回无效响应'}; } }
+			function api(url, options) {
+				return fetch(url, options || {}).then(function (response) {
+					return response.text().then(function (text) {
+						var data = parse(text);
+						if (!response.ok || data.ok === false) throw new Error(data.error || data.detail || ('HTTP ' + response.status));
+						return data;
+					});
 				});
+			}
 
-				form.addEventListener('submit', function (event) {
-					var image = file.files[0];
-					var request;
+			function selectView(id) {
+				var views = document.querySelectorAll('.view');
+				var buttons = document.querySelectorAll('nav button');
+				var i;
+				for (i = 0; i < views.length; i++) views[i].className = 'view' + (views[i].id === id ? ' active' : '');
+				for (i = 0; i < buttons.length; i++) buttons[i].className = buttons[i].getAttribute('data-view') === id ? 'active' : '';
+			}
 
-					event.preventDefault();
-					if (!image) {
-						status.textContent = 'Select a firmware image.';
-						return;
+			function loadInfo() {
+				el('online').textContent = '正在连接设备';
+				return api('/api/info').then(function (data) {
+					var rows = '';
+					var i, p;
+					info = data;
+					el('product').textContent = data.product;
+					el('device').textContent = data.device;
+					el('ip').textContent = data.ip;
+					el('flashSize').textContent = bytes(data.flash_size);
+					el('version').textContent = data.version;
+					el('online').textContent = '设备在线 · ' + data.ip;
+					el('online').className = 'pill online';
+					for (i = 0; i < data.partitions.length; i++) {
+						p = data.partitions[i];
+						rows += '<tr><td>' + p.name + '</td><td>' + hex(p.offset) + '</td><td>' + bytes(p.size) + '</td><td><span class="tag ' + (p.protected ? 'locked' : 'open') + '">' + (p.protected ? '保护' : '可更新') + '</span></td></tr>';
 					}
-
-					request = new XMLHttpRequest();
-					request.open('POST', '/api/upload');
-					request.setRequestHeader('Content-Type', 'application/octet-stream');
-					request.upload.onprogress = function (upload) {
-						if (upload.lengthComputable)
-							progress.value = upload.loaded * 100 / upload.total;
-					};
-					request.onload = function () {
-						status.textContent = request.responseText;
-					};
-					request.onerror = function () {
-						status.textContent = 'Upload failed.';
-					};
-					progress.value = 0;
-					status.textContent = 'Uploading firmware to RAM...';
-					request.send(image);
+					el('partitions').innerHTML = rows;
+				}).catch(function (error) {
+					el('online').textContent = '设备连接失败';
+					el('online').className = 'pill error';
+					throw error;
 				});
-			}());
+			}
+
+			function upload(target, file, progress) {
+				return new Promise(function (resolve, reject) {
+					var request = new XMLHttpRequest();
+					request.open('POST', '/api/upload/' + target);
+					request.setRequestHeader('Content-Type', 'application/octet-stream');
+					request.upload.onprogress = function (event) { if (event.lengthComputable) progress.value = event.loaded * 100 / event.total; };
+					request.onload = function () { var data = parse(request.responseText); if (request.status >= 200 && request.status < 300 && data.ok !== false) resolve(data); else reject(new Error(data.error || data.detail || ('HTTP ' + request.status))); };
+					request.onerror = function () { reject(new Error('网络上传失败')); };
+					progress.value = 0;
+					request.send(file);
+				});
+			}
+
+			function showJob(data) {
+				el('jobBox').className = 'panel job';
+				el('jobPhase').textContent = phaseNames[data.phase] || data.phase;
+				el('jobPercent').textContent = data.progress + '%';
+				el('jobProgress').value = data.progress;
+				el('jobDetail').textContent = data.error || (data.target ? '目标分区：' + data.target : '');
+			}
+
+			function trackJob() {
+				clearTimeout(jobTimer);
+				api('/api/job').then(function (data) {
+					showJob(data);
+					if (data.phase === 'error') return;
+					if (data.phase !== 'done') jobTimer = setTimeout(trackJob, 500);
+				}).catch(function () {
+					jobTimer = setTimeout(trackJob, 1000);
+				});
+			}
+
+			function startFlash(confirmPhrase) {
+				return api('/api/flash', {method:'POST',headers:{'X-Safeboot-Confirm':confirmPhrase}}).then(function () { trackJob(); });
+			}
+
+			function loadEnv() {
+				return api('/api/env').then(function (data) {
+					el('envIp').value = data.ipaddr;
+					el('envMask').value = data.netmask;
+					el('envServer').value = data.serverip;
+					el('envDelay').value = data.bootdelay;
+				});
+			}
+
+			var nav = document.querySelectorAll('nav button');
+			for (var i = 0; i < nav.length; i++) nav[i].onclick = function () { selectView(this.getAttribute('data-view')); if (this.getAttribute('data-view') === 'environment') loadEnv(); };
+			el('refresh').onclick = loadInfo;
+			el('envReload').onclick = loadEnv;
+
+			el('firmwareUpload').onclick = function () {
+				var file = el('firmwareFile').files[0];
+				firmwareReady = false;
+				el('firmwareFlash').disabled = true;
+				if (!file) return status(el('firmwareStatus'), '请先选择 OpenWrt sysupgrade.bin。', 'bad');
+				status(el('firmwareStatus'), '正在上传到 RAM，Flash 尚未修改。', 'busy');
+				upload('firmware', file, el('firmwareProgress')).then(function (data) {
+					firmwareReady = true;
+					el('firmwareFlash').disabled = false;
+					status(el('firmwareStatus'), data.detail + '；CRC32 ' + data.crc32 + '；大小 ' + bytes(data.size), 'ok');
+				}).catch(function (error) { status(el('firmwareStatus'), '验证失败：' + error.message, 'bad'); });
+			};
+
+			el('firmwareFlash').onclick = function () {
+				if (!firmwareReady || !confirm('即将擦除并重写整个 firmware 分区。确认继续？')) return;
+				this.disabled = true;
+				startFlash('FLASH-FIRMWARE').catch(function (error) { status(el('firmwareStatus'), '无法启动刷写：' + error.message, 'bad'); });
+			};
+
+			el('rawUpload').onclick = function () {
+				var target = el('rawTarget').value;
+				var file = el('rawFile').files[0];
+				rawReady = false;
+				el('rawRestore').disabled = true;
+				if (!file) return status(el('rawStatus'), '请选择原始分区备份文件。', 'bad');
+				status(el('rawStatus'), '正在上传并验证 ' + target + ' 备份。', 'busy');
+				upload(target, file, el('rawProgress')).then(function (data) {
+					rawReady = true;
+					el('rawRestore').disabled = false;
+					status(el('rawStatus'), data.detail + '；CRC32 ' + data.crc32, 'ok');
+				}).catch(function (error) { status(el('rawStatus'), '验证失败：' + error.message, 'bad'); });
+			};
+
+			el('rawTarget').onchange = function () { rawReady = false; el('rawRestore').disabled = true; el('rawConfirm').value = ''; };
+			el('rawRestore').onclick = function () {
+				var target = el('rawTarget').value;
+				var expected = target === 'uboot' ? 'RESTORE-UBOOT' : target === 'factory' ? 'RESTORE-FACTORY' : 'RESTORE-ENVIRONMENT';
+				if (!rawReady) return;
+				if (el('rawConfirm').value !== expected) return status(el('rawStatus'), '确认口令不正确，应输入 ' + expected, 'bad');
+				if (!confirm('这是高风险分区写入。确认将备份写入 ' + target + '？')) return;
+				this.disabled = true;
+				startFlash(expected).then(function () { selectView('firmware'); }).catch(function (error) { status(el('rawStatus'), '无法启动恢复：' + error.message, 'bad'); });
+			};
+
+			el('envForm').onsubmit = function (event) {
+				var body;
+				event.preventDefault();
+				body = 'ipaddr=' + encodeURIComponent(el('envIp').value) + '&netmask=' + encodeURIComponent(el('envMask').value) + '&serverip=' + encodeURIComponent(el('envServer').value) + '&bootdelay=' + encodeURIComponent(el('envDelay').value);
+				status(el('envStatus'), '正在保存环境变量。', 'busy');
+				api('/api/env', {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body}).then(function (data) { status(el('envStatus'), data.message, 'ok'); }).catch(function (error) { status(el('envStatus'), error.message, 'bad'); });
+			};
+
+			el('envReset').onclick = function () {
+				var phrase = prompt('输入 RESET-ENVIRONMENT 确认恢复默认环境：', '');
+				if (phrase !== 'RESET-ENVIRONMENT') return;
+				api('/api/env/reset', {method:'POST',headers:{'X-Safeboot-Confirm':phrase}}).then(function (data) { status(el('envStatus'), data.message, 'ok'); loadEnv(); }).catch(function (error) { status(el('envStatus'), error.message, 'bad'); });
+			};
+
+			el('factoryReset').onclick = function () {
+				var phrase = prompt('输入 ERASE-SETTINGS 确认清除 OpenWrt 配置：', '');
+				if (phrase !== 'ERASE-SETTINGS') return;
+				api('/api/factory-reset', {method:'POST',headers:{'X-Safeboot-Confirm':phrase}}).then(function () { selectView('firmware'); trackJob(); }).catch(function (error) { alert(error.message); });
+			};
+
+			el('reboot').onclick = function () {
+				if (!confirm('确认立即重启设备？')) return;
+				api('/api/reboot', {method:'POST'}).then(function () { el('online').textContent = '设备正在重启'; });
+			};
+
+			loadInfo();
+		}());
 		</script>
 	</body>
 </html>

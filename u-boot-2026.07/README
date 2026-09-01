@@ -1,3 +1,20 @@
 CONFIG_FIT → 已关 ✓
 CONFIG_BOOTSTD → 已关 ✓
 PXE / BOOTMETH_* / BOOTDEV_* → 全部消失，无残留 ✓
+
+为控制 U-Boot 在 192 KiB 以内，当前还移除了以下配置：
+
+CONFIG_AUTO_COMPLETE → 已关（命令行 Tab 自动补全）
+CONFIG_SYS_LONGHELP → 已关（命令的长帮助文字）
+CONFIG_CMD_FDT → 已关（手动 fdt 命令，内部设备树仍保留）
+CONFIG_CMD_EXPORTENV → 已关（批量导出环境变量）
+CONFIG_CMD_IMPORTENV → 已关（批量导入环境变量）
+CONFIG_CMD_EDITENV → 已关（editenv 交互编辑）
+CONFIG_CMD_SPI → 已关（原始 SPI 命令，sf 命令仍保留）
+CONFIG_SCSI / CONFIG_CMD_SCSI → 已关（不影响 USB 存储）
+CONFIG_FS_EXT4 → 已关（FAT 文件系统仍保留）
+
+同时启用体积优化：
+
+CONFIG_LZMA_SIZE_OPTIMIZATION → 已开 ✓
+CONFIG_SPL_LZMA_SIZE_OPTIMIZATION → 已开 ✓

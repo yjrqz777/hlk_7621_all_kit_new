@@ -2279,6 +2279,54 @@ config CMD_TFTPBOOT
 	help
 	  tftpboot - load file via network using TFTP protocol
 
+config CMD_WEBFLASH
+	bool "webflash"
+	depends on NET_LWIP
+	select PROT_TCP_LWIP
+	help
+	  Start a small HTTP recovery server using the lwIP raw TCP API.
+	  The first implementation accepts an OpenWrt firmware upload into
+	  RAM only; it does not erase or write flash.
+
+if CMD_WEBFLASH
+
+config WEBFLASH_FIRMWARE_OFFSET
+	hex "Firmware partition offset"
+	default 0x50000
+	help
+	  Start offset of the firmware partition in SPI flash. This value is
+	  reported by the recovery page but is not written in RAM-upload-only
+	  mode.
+
+config WEBFLASH_FIRMWARE_SIZE
+	hex "Firmware partition size"
+	default 0x1fb0000
+	help
+	  Maximum accepted upload size and size of the firmware partition.
+
+config WEBFLASH_DEVICE_ID
+	string "Expected OpenWrt device ID"
+	default "hilink,hlk-7621a-evb"
+	help
+	  OpenWrt supported-device identifier expected by the future image
+	  validation and flash-writing stage.
+
+config WEBFLASH_DEFAULT_IPADDR
+	string "Default Web recovery IP address"
+	default "192.168.1.1"
+	help
+	  IP address used by webflash when the ipaddr environment variable is
+	  missing. A value already saved in the environment takes precedence.
+
+config WEBFLASH_DEFAULT_NETMASK
+	string "Default Web recovery network mask"
+	default "255.255.255.0"
+	help
+	  Network mask used by webflash when the netmask environment variable is
+	  missing. A value already saved in the environment takes precedence.
+
+endif
+
 config CMD_WGET
 	bool "wget"
 	default y if SANDBOX || ARCH_QEMU

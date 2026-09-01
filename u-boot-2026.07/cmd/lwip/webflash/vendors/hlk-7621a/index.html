@@ -1,0 +1,79 @@
+<!DOCTYPE HTML>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width,initial-scale=1">
+		<title>HLK-7621A firmware update</title>
+		<link rel="stylesheet" href="/style.css">
+	</head>
+	<body>
+		<div id="m">
+			<h1>FIRMWARE UPDATE</h1>
+			<p>Select the OpenWrt sysupgrade image for <strong>HLK-7621A</strong> and upload it to RAM.</p>
+			<div id="device" class="i">Loading device information...</div>
+			<form id="upload">
+				<input id="firmware" type="file" name="firmware" required>
+				<input type="submit" value="Upload firmware">
+			</form>
+			<progress id="progress" value="0" max="100"></progress>
+			<div id="status" class="i">Flash is not modified by this upload stage.</div>
+			<div class="i w">
+				<strong>WARNINGS</strong>
+				<ul>
+					<li>choose firmware built for hilink,hlk-7621a-evb</li>
+					<li>do not power off the device during recovery</li>
+					<li>the current implementation uploads to RAM only</li>
+				</ul>
+			</div>
+		</div>
+		<div id="f">HLK-7621A U-Boot Web Recovery</div>
+		<script>
+			(function () {
+				var device = document.getElementById('device');
+				var form = document.getElementById('upload');
+				var file = document.getElementById('firmware');
+				var progress = document.getElementById('progress');
+				var status = document.getElementById('status');
+
+				fetch('/api/info').then(function (response) {
+					return response.json();
+				}).then(function (info) {
+					device.textContent = 'Device: ' + info.device +
+						' | U-Boot: ' + info.version +
+						' | IP: ' + info.ip +
+						' | Maximum upload: ' + info.max_upload + ' bytes';
+				}).catch(function () {
+					device.textContent = 'Unable to read device information.';
+				});
+
+				form.addEventListener('submit', function (event) {
+					var image = file.files[0];
+					var request;
+
+					event.preventDefault();
+					if (!image) {
+						status.textContent = 'Select a firmware image.';
+						return;
+					}
+
+					request = new XMLHttpRequest();
+					request.open('POST', '/api/upload');
+					request.setRequestHeader('Content-Type', 'application/octet-stream');
+					request.upload.onprogress = function (upload) {
+						if (upload.lengthComputable)
+							progress.value = upload.loaded * 100 / upload.total;
+					};
+					request.onload = function () {
+						status.textContent = request.responseText;
+					};
+					request.onerror = function () {
+						status.textContent = 'Upload failed.';
+					};
+					progress.value = 0;
+					status.textContent = 'Uploading firmware to RAM...';
+					request.send(image);
+				});
+			}());
+		</script>
+	</body>
+</html>

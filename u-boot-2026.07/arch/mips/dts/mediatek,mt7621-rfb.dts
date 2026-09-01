@@ -8,6 +8,8 @@
 /dts-v1/;
 
 #include "mt7621.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
 
 / {
 	compatible = "mediatek,mt7621-rfb", "mediatek,mt7621-soc";
@@ -31,6 +33,17 @@
 		};
 	};
 
+	/* WDT_RST_N is muxed as GPIO18; the button pulls it to ground. */
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		recovery {
+			label = "recovery";
+			gpios = <&gpio0 18 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+		};
+	};
+
 	options {
 		u-boot {
 			compatible = "u-boot,config";
@@ -47,9 +60,12 @@
 			function = "gpio";
 		};
 
-		wdt {
+		/* Use WDT_RST_N as a low-active recovery button on GPIO18. */
+		wdt_gpio {
 			groups = "wdt";
-			function = "wdt rst";
+			function = "gpio";
+			bias-pull-up;
+			input-schmitt-enable;
 		};
 
 		jtag {

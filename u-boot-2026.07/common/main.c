@@ -97,7 +97,7 @@ void main_loop(void)
 
 	/*
 	 * 检查开机按键，并执行对应的 button_cmd_x 环境命令。
-	 * 可用于“按住恢复键进入 webflash”；当前 BUTTON_CMD 未启用。
+	 * 当前配置用于“按住 WDT_RST_N 恢复键进入 webflash”。
 	 */
 	process_button_cmds();
 

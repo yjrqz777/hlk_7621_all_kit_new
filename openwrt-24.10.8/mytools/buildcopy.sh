@@ -1,0 +1,2 @@
+cp bin/targets/ramips/mt7621/openwrt-ramips-mt7621-hilink_hlk-7621a-evb-initramfs-kernel.bin /mnt/d/document/github/hlk/SNANDer/flash/openwrt-ramips-mt7621-hilink_hlk-7621a-evb-initramfs-kernel.bin
+cp bin/targets/ramips/mt7621/openwrt-ramips-mt7621-hilink_hlk-7621a-evb-squashfs-sysupgrade.bin /mnt/d/document/github/hlk/SNANDer/flash/openwrt-ramips-mt7621-hilink_hlk-7621a-evb-squashfs-sysupgrade.bin

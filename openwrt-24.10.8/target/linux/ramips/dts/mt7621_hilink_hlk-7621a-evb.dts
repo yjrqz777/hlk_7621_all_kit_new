@@ -18,6 +18,10 @@
 			linux,code = <KEY_RESTART>;
 		};
 	};
+
+	chosen {
+		bootargs = "console=ttyS0,115200";
+	};
 };
 
 &spi0 {

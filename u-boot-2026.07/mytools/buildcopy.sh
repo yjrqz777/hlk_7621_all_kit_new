@@ -1,0 +1,1 @@
+cp build/u-boot-mt7621.bin /mnt/d/document/github/hlk/SNANDer/flash/u-boot-mt7621.bin

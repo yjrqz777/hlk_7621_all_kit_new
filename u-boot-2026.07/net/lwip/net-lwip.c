@@ -41,26 +41,35 @@ static err_t net_lwip_tx(struct netif *netif, struct pbuf *p)
 {
 	struct udevice *udev = netif->state;
 	void *pp = NULL;
+	u16_t frame_len = p->tot_len;
 	int err;
 
 	if (CONFIG_IS_ENABLED(LWIP_DEBUG_RXTX)) {
-		printf("net_lwip_tx: %u bytes, udev %s\n", p->len, udev->name);
-		print_hex_dump("net_lwip_tx: ", 0, 16, 1, p->payload, p->len,
-			       true);
+		printf("net_lwip_tx: %u bytes, udev %s\n", frame_len,
+		       udev->name);
 	}
 
-	if ((unsigned long)p->payload % PKTALIGN) {
+	if (p->next || (unsigned long)p->payload % PKTALIGN) {
 		/*
-		 * Some net drivers have strict alignment requirements and may
-		 * fail or output invalid data if the packet is not aligned.
+		 * A lwIP TCP frame can span multiple pbufs, while U-Boot Ethernet
+		 * drivers expect one contiguous, aligned frame. Sending only the
+		 * first pbuf truncates HTTP responses even though TCP handshakes
+		 * (which normally fit in one pbuf) still work.
 		 */
-		pp = memalign(PKTALIGN, p->len);
+		pp = memalign(PKTALIGN, frame_len);
 		if (!pp)
-			return ERR_ABRT;
-		memcpy(pp, p->payload, p->len);
+			return ERR_MEM;
+		if (pbuf_copy_partial(p, pp, frame_len, 0) != frame_len) {
+			free(pp);
+			return ERR_BUF;
+		}
 	}
 
-	err = eth_get_ops(udev)->send(udev, pp ? pp : p->payload, p->len);
+	if (CONFIG_IS_ENABLED(LWIP_DEBUG_RXTX))
+		print_hex_dump("net_lwip_tx: ", 0, 16, 1,
+			       pp ? pp : p->payload, frame_len, true);
+
+	err = eth_get_ops(udev)->send(udev, pp ? pp : p->payload, frame_len);
 	free(pp);
 	if (err) {
 		debug("send error %d\n", err);

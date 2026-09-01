@@ -41,9 +41,12 @@ struct webflash_ctx {
 	ulong last_activity;
 	ulong completed_addr;
 	ulong completed_size;
+	ulong reply_pending;
 	size_t header_len;
 	enum webflash_rx_state rx_state;
 	bool client_aborted;
+	bool output_pending;
+	bool close_pending;
 	char header[WEBFLASH_HEADER_SIZE];
 	char reply[WEBFLASH_REPLY_SIZE];
 };
@@ -63,21 +66,40 @@ static void webflash_detach_client(struct webflash_ctx *ctx)
 	ctx->client = NULL;
 }
 
-static void webflash_close_client(struct webflash_ctx *ctx, bool abort)
+static void webflash_abort_client(struct webflash_ctx *ctx)
 {
 	struct tcp_pcb *pcb = ctx->client;
-	err_t err = ERR_OK;
 
 	if (!pcb)
 		return;
 
 	webflash_detach_client(ctx);
-	if (!abort)
-		err = tcp_close(pcb);
-	if (abort || err != ERR_OK) {
-		ctx->client_aborted = true;
-		tcp_abort(pcb);
+	ctx->client_aborted = true;
+	tcp_abort(pcb);
+}
+
+static err_t webflash_try_close_client(struct webflash_ctx *ctx)
+{
+	struct tcp_pcb *pcb = ctx->client;
+	err_t err;
+
+	if (!pcb)
+		return ERR_OK;
+
+	err = tcp_close(pcb);
+	if (err == ERR_OK) {
+		ctx->client = NULL;
+		ctx->close_pending = false;
+		return ERR_OK;
 	}
+	if (err == ERR_MEM) {
+		ctx->close_pending = true;
+		return ERR_MEM;
+	}
+
+	printf("Web tcp_close failed: %d\n", err);
+	webflash_abort_client(ctx);
+	return ERR_ABRT;
 }
 
 static int webflash_reply(struct webflash_ctx *ctx, const char *status,
@@ -101,22 +123,41 @@ static int webflash_reply(struct webflash_ctx *ctx, const char *status,
 			      status, type, (unsigned int)body_len);
 	if (header_len < 0 || header_len >= (int)sizeof(header) ||
 	    body_len > U16_MAX) {
-		webflash_close_client(ctx, true);
+		webflash_abort_client(ctx);
 		return -EOVERFLOW;
 	}
 
 	err = tcp_write(pcb, header, (u16_t)header_len, TCP_WRITE_FLAG_COPY);
-	if (err == ERR_OK)
-		err = tcp_write(pcb, body, (u16_t)body_len, TCP_WRITE_FLAG_COPY);
-	if (err == ERR_OK)
-		err = tcp_output(pcb);
 	if (err != ERR_OK) {
-		webflash_close_client(ctx, true);
+		printf("Web response header tcp_write failed: %d\n", err);
+		webflash_abort_client(ctx);
+		return -EIO;
+	}
+	err = tcp_write(pcb, body, (u16_t)body_len, TCP_WRITE_FLAG_COPY);
+	if (err != ERR_OK) {
+		printf("Web response body tcp_write failed: %d\n", err);
+		webflash_abort_client(ctx);
 		return -EIO;
 	}
 
 	ctx->rx_state = WEBFLASH_RX_REPLIED;
-	webflash_close_client(ctx, false);
+	ctx->reply_pending = header_len + body_len;
+	ctx->output_pending = false;
+	ctx->close_pending = false;
+	printf("Web response: %s, %lu bytes queued\n", status,
+	       ctx->reply_pending);
+
+	err = tcp_output(pcb);
+	if (err == ERR_MEM) {
+		ctx->output_pending = true;
+		return 0;
+	}
+	if (err != ERR_OK) {
+		printf("Web response tcp_output failed: %d\n", err);
+		webflash_abort_client(ctx);
+		return -EIO;
+	}
+
 	return 0;
 }
 
@@ -193,6 +234,11 @@ static int webflash_prepare_upload(struct webflash_ctx *ctx)
 static int webflash_handle_headers(struct webflash_ctx *ctx)
 {
 	const char *ip = env_get("ipaddr");
+	const char *line_end = strstr(ctx->header, "\r\n");
+	int line_len = line_end ? (int)(line_end - ctx->header) :
+		       (int)ctx->header_len;
+
+	printf("Web request: %.*s\n", line_len, ctx->header);
 
 	if (webflash_path_is(ctx->header, ctx->header_len, "GET", "/") ||
 	    webflash_path_is(ctx->header, ctx->header_len,
@@ -294,17 +340,21 @@ static err_t webflash_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
 {
 	struct webflash_ctx *ctx = arg;
 	struct pbuf *q;
+	err_t close_err;
 
 	if (!p) {
-		webflash_close_client(ctx, false);
-		return ERR_OK;
+		puts("Web client closed the connection\n");
+		close_err = webflash_try_close_client(ctx);
+		return close_err == ERR_ABRT ? ERR_ABRT : ERR_OK;
 	}
 	if (err != ERR_OK) {
+		printf("Web receive error: %d\n", err);
 		pbuf_free(p);
-		webflash_close_client(ctx, true);
+		webflash_abort_client(ctx);
 		return ERR_ABRT;
 	}
 
+	printf("Web received: %u bytes\n", p->tot_len);
 	ctx->last_activity = get_timer(0);
 	tcp_recved(pcb, p->tot_len);
 	for (q = p; q && ctx->client; q = q->next) {
@@ -315,11 +365,39 @@ static err_t webflash_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
 	return ctx->client_aborted ? ERR_ABRT : ERR_OK;
 }
 
+static err_t webflash_sent(void *arg, struct tcp_pcb *pcb, u16_t len)
+{
+	struct webflash_ctx *ctx = arg;
+	err_t err;
+
+	if (pcb != ctx->client)
+		return ERR_VAL;
+
+	ctx->last_activity = get_timer(0);
+	if (len >= ctx->reply_pending)
+		ctx->reply_pending = 0;
+	else
+		ctx->reply_pending -= len;
+	printf("Web acknowledged: %u bytes, %lu remaining\n", len,
+	       ctx->reply_pending);
+
+	if (ctx->rx_state != WEBFLASH_RX_REPLIED || ctx->reply_pending)
+		return ERR_OK;
+
+	ctx->output_pending = false;
+	ctx->close_pending = true;
+	err = webflash_try_close_client(ctx);
+	return err == ERR_ABRT ? ERR_ABRT : ERR_OK;
+}
+
 static void webflash_tcp_error(void *arg, err_t err)
 {
 	struct webflash_ctx *ctx = arg;
 
 	ctx->client = NULL;
+	ctx->reply_pending = 0;
+	ctx->output_pending = false;
+	ctx->close_pending = false;
 	if (err != ERR_ABRT)
 		printf("Web connection error: %d\n", err);
 }
@@ -327,10 +405,30 @@ static void webflash_tcp_error(void *arg, err_t err)
 static err_t webflash_poll(void *arg, struct tcp_pcb *pcb)
 {
 	struct webflash_ctx *ctx = arg;
+	err_t err;
+
+	if (ctx->output_pending) {
+		err = tcp_output(pcb);
+		if (err == ERR_OK)
+			ctx->output_pending = false;
+		else if (err != ERR_MEM) {
+			printf("Web response tcp_output retry failed: %d\n", err);
+			webflash_abort_client(ctx);
+			return ERR_ABRT;
+		}
+	}
+
+	if (ctx->close_pending && !ctx->reply_pending) {
+		err = webflash_try_close_client(ctx);
+		if (err == ERR_OK)
+			return ERR_OK;
+		if (err == ERR_ABRT)
+			return ERR_ABRT;
+	}
 
 	if (get_timer(ctx->last_activity) > WEBFLASH_IDLE_TIMEOUT_MS) {
 		puts("Web connection timed out\n");
-		webflash_close_client(ctx, true);
+		webflash_abort_client(ctx);
 		return ERR_ABRT;
 	}
 
@@ -355,12 +453,18 @@ static err_t webflash_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 	ctx->last_activity = get_timer(0);
 	ctx->rx_state = WEBFLASH_RX_HEADERS;
 	ctx->client_aborted = false;
+	ctx->reply_pending = 0;
+	ctx->output_pending = false;
+	ctx->close_pending = false;
 	ctx->header[0] = '\0';
+	printf("Web client connected: %s:%u\n",
+	       ipaddr_ntoa(&pcb->remote_ip), pcb->remote_port);
 
 	tcp_setprio(pcb, TCP_PRIO_MIN);
 	tcp_nagle_disable(pcb);
 	tcp_arg(pcb, ctx);
 	tcp_recv(pcb, webflash_recv);
+	tcp_sent(pcb, webflash_sent);
 	tcp_err(pcb, webflash_tcp_error);
 	tcp_poll(pcb, webflash_poll, WEBFLASH_TCP_POLL_INTERVAL);
 	return ERR_OK;
@@ -469,7 +573,7 @@ static int do_webflash(struct cmd_tbl *cmdtp, int flag, int argc,
 		net_lwip_rx(udev, netif);
 
 	puts("\nStopping Web recovery\n");
-	webflash_close_client(&ctx, true);
+	webflash_abort_client(&ctx);
 	if (ctx.listener) {
 		tcp_arg(ctx.listener, NULL);
 		tcp_accept(ctx.listener, NULL);

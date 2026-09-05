@@ -19,6 +19,15 @@
 		};
 	};
 
+	leds { /* BOOT LED*/
+		compatible = "gpio-leds";
+
+		boot_led: led-boot {
+			label = "boot";
+			gpios = <&gpio 13 1>; /* JTDO 1 = 低电平有效 */
+		};
+	};
+
 	chosen {
 		bootargs = "console=ttyS0,115200";
 	};
@@ -124,7 +133,7 @@
 
 &state_default {
 	gpio {
-		groups = "wdt";
+		groups = "jtag", "wdt";
 		function = "gpio";
 	};
 };

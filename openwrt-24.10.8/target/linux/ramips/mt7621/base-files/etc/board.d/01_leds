@@ -7,6 +7,9 @@ board=$(board_name)
 board_config_update
 
 case $board in
+hilink,hlk-7621a-evb)
+	ucidef_set_led_heartbeat "boot" "Boot LED" "boot"
+	;;
 alfa-network,ax1800rm)
 	ucidef_set_led_netdev "lan1" "lan1" "green:lan1" "lan1"
 	ucidef_set_led_netdev "lan2" "lan2" "green:lan2" "lan2"

@@ -45,12 +45,17 @@ DECLARE_GLOBAL_DATA_PTR;
 #define WEBFLASH_FWTOOL_INFO		1
 #define WEBFLASH_SQUASHFS_MAGIC		0x73717368
 #define WEBFLASH_SQUASHFS_SB_SIZE	96
+#define WEBFLASH_BOOT_DELAY_MS		1500
+#define WEBFLASH_EEPROM_OFFSET		0x8000
+#define WEBFLASH_EEPROM_SIZE		0x200
 
 #define WEBFLASH_PART_PROTECTED	BIT(0)
 #define WEBFLASH_PART_FIRMWARE	BIT(1)
 #define WEBFLASH_PART_ENV	BIT(2)
 #define WEBFLASH_PART_FACTORY	BIT(3)
 #define WEBFLASH_PART_UBOOT	BIT(4)
+#define WEBFLASH_PART_EEPROM	BIT(5)
+#define WEBFLASH_PART_RAM	BIT(6)
 
 enum webflash_rx_state {
 	WEBFLASH_RX_HEADERS,
@@ -91,6 +96,8 @@ struct webflash_job {
 	enum webflash_job_mode mode;
 	enum webflash_job_phase phase;
 	const struct webflash_partition *part;
+	ulong source_addr;
+	const u8 *source_buffer;
 	u32 erase_offset;
 	u32 erase_size;
 	u32 write_size;
@@ -129,10 +136,15 @@ struct webflash_ctx {
 	bool stream_active;
 	bool stream_from_flash;
 	bool reboot_pending;
+	bool keep_config;
+	bool boot_pending;
+	ulong boot_addr;
+	ulong boot_start;
 	u8 *io_buf;
 	char header[WEBFLASH_HEADER_SIZE];
 	char reply[WEBFLASH_REPLY_SIZE];
 	char body[WEBFLASH_BODY_SIZE];
+	u8 *factory_buf;
 	char upload_detail[128];
 };
 
@@ -148,6 +160,22 @@ struct webflash_fwimage_trailer {
 	u8 pad[3];
 	__be32 size;
 } __packed;
+
+static const struct webflash_partition webflash_eeprom_partition = {
+	.name = "eeprom",
+	.filename = "",
+	.offset = CONFIG_WEBFLASH_FACTORY_OFFSET + WEBFLASH_EEPROM_OFFSET,
+	.size = WEBFLASH_EEPROM_SIZE,
+	.flags = WEBFLASH_PART_PROTECTED | WEBFLASH_PART_EEPROM,
+};
+
+static const struct webflash_partition webflash_ram_partition = {
+	.name = "ram",
+	.filename = "",
+	.offset = 0,
+	.size = CONFIG_WEBFLASH_FIRMWARE_SIZE,
+	.flags = WEBFLASH_PART_RAM,
+};
 
 static const struct webflash_partition webflash_partitions[] = {
 	{
@@ -206,12 +234,18 @@ static bool webflash_job_active(const struct webflash_ctx *ctx)
 
 static bool webflash_operation_blocked(const struct webflash_ctx *ctx)
 {
-	return webflash_job_active(ctx) || ctx->reboot_pending;
+	return webflash_job_active(ctx) || ctx->reboot_pending ||
+	       ctx->boot_pending;
 }
 
 static const struct webflash_partition *webflash_partition_find(const char *name)
 {
 	int i;
+
+	if (!strcmp(name, "eeprom"))
+		return &webflash_eeprom_partition;
+	if (!strcmp(name, "ram"))
+		return &webflash_ram_partition;
 
 	for (i = 0; i < ARRAY_SIZE(webflash_partitions); i++) {
 		if (!strcmp(webflash_partitions[i].name, name))
@@ -269,7 +303,6 @@ static err_t webflash_try_close_client(struct webflash_ctx *ctx)
 		return ERR_MEM;
 	}
 
-	printf("YJRQZ Boot tcp_close failed: %d\n", err);
 	webflash_abort_client(ctx);
 	return ERR_ABRT;
 }
@@ -326,7 +359,6 @@ static int webflash_reply(struct webflash_ctx *ctx, const char *status,
 	return 0;
 
 write_error:
-	printf("YJRQZ Boot response write failed: %d\n", err);
 	webflash_abort_client(ctx);
 	return -EIO;
 }
@@ -506,14 +538,14 @@ static int webflash_validate_fwtool(const u8 *image, u32 image_size,
 			break;
 		record_size = be32_to_cpu(trailer->size);
 		if (record_size < sizeof(*trailer) || record_size > cursor) {
-			snprintf(detail, detail_size, "invalid OpenWrt metadata size");
+			snprintf(detail, detail_size, "bad metadata size");
 			return -EINVAL;
 		}
 
 		calc_crc = crc32_no_comp(~0U, image, trailer_offset);
 		stored_crc = be32_to_cpu(trailer->crc32);
 		if (calc_crc != stored_crc) {
-			snprintf(detail, detail_size, "OpenWrt metadata CRC mismatch");
+			snprintf(detail, detail_size, "metadata CRC mismatch");
 			return -EBADMSG;
 		}
 
@@ -526,7 +558,7 @@ static int webflash_validate_fwtool(const u8 *image, u32 image_size,
 			}
 			fw_header = (const void *)(image + data_start);
 			if (fw_header->version) {
-				snprintf(detail, detail_size, "unsupported metadata version");
+				snprintf(detail, detail_size, "bad metadata version");
 				return -EPROTONOSUPPORT;
 			}
 			json = image + data_start + sizeof(*fw_header);
@@ -549,7 +581,7 @@ static int webflash_validate_fwtool(const u8 *image, u32 image_size,
 		cursor = data_start;
 	}
 
-	snprintf(detail, detail_size, "OpenWrt sysupgrade metadata not found");
+	snprintf(detail, detail_size, "metadata not found");
 	return -ENOENT;
 }
 
@@ -575,19 +607,57 @@ static int webflash_validate_upload(struct webflash_ctx *ctx)
 	data = map_sysmem(ctx->completed_addr, ctx->completed_size);
 	ctx->upload_crc = crc32_wd(0, data, ctx->completed_size, 64 * 1024);
 
-	if (part->flags & WEBFLASH_PART_FIRMWARE) {
+	if (part->flags & WEBFLASH_PART_EEPROM) {
+		u16 chip_id = get_unaligned_le16(data);
+		u16 pci_id = get_unaligned_le16(data + 0x0a);
+
+		if (ctx->completed_size != WEBFLASH_EEPROM_SIZE ||
+		    (chip_id != 0x7612 && chip_id != 0x7662 &&
+		     pci_id != 0x7612 && pci_id != 0x7662)) {
+			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+				 "bad EEPROM: chip=%04x pci=%04x",
+				 chip_id, pci_id);
+			ret = -EINVAL;
+		} else if (webflash_buffer_uniform(data, ctx->completed_size)) {
+			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+				 "EEPROM is uniform");
+			ret = -EINVAL;
+		} else {
+			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+				 "MT7612 EEPROM verified");
+		}
+	} else if (part->flags & WEBFLASH_PART_RAM) {
+		const struct legacy_img_hdr *header = (const void *)data;
+
+		if (ctx->completed_size < sizeof(*header) ||
+		    !image_check_magic(header) || !image_check_hcrc(header) ||
+		    !image_check_os(header, IH_OS_LINUX) ||
+		    !image_check_arch(header, IH_ARCH_MIPS) ||
+		    !image_check_type(header, IH_TYPE_KERNEL)) {
+			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+				 "not a MIPS Linux uImage");
+			ret = -ENOEXEC;
+		} else if (!image_check_dcrc(header)) {
+			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+				 "uImage data CRC mismatch");
+			ret = -EBADMSG;
+		} else {
+			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+				 "RAM boot image verified");
+		}
+	} else if (part->flags & WEBFLASH_PART_FIRMWARE) {
 		const struct legacy_img_hdr *header = (const void *)data;
 		u32 legacy_size;
 
 		if (ctx->completed_size < sizeof(*header)) {
 			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "image is smaller than a uImage header");
+				 "image too small");
 			ret = -EINVAL;
 			goto out;
 		}
 		if (!image_check_magic(header) || !image_check_hcrc(header)) {
 			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "invalid uImage header or header CRC");
+				 "bad uImage header");
 			ret = -EBADMSG;
 			goto out;
 		}
@@ -602,7 +672,7 @@ static int webflash_validate_upload(struct webflash_ctx *ctx)
 		    !image_check_arch(header, IH_ARCH_MIPS) ||
 		    !image_check_type(header, IH_TYPE_KERNEL)) {
 			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "uImage is not a MIPS Linux kernel image");
+				 "not a MIPS kernel image");
 			ret = -ENOEXEC;
 			goto out;
 		}
@@ -617,7 +687,7 @@ static int webflash_validate_upload(struct webflash_ctx *ctx)
 					       sizeof(ctx->upload_detail));
 		if (!ret)
 			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "OpenWrt image verified for %s",
+				 "image verified for %s",
 				 CONFIG_WEBFLASH_DEVICE_ID);
 	} else if (part->flags & WEBFLASH_PART_ENV) {
 		u32 stored_crc;
@@ -636,7 +706,7 @@ static int webflash_validate_upload(struct webflash_ctx *ctx)
 			ret = -EBADMSG;
 		} else {
 			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "raw environment partition verified");
+				 "env partition verified");
 		}
 	} else {
 		if (webflash_buffer_uniform(data, ctx->completed_size)) {
@@ -646,11 +716,11 @@ static int webflash_validate_upload(struct webflash_ctx *ctx)
 		if ((part->flags & WEBFLASH_PART_UBOOT) &&
 		    (ctx->completed_size < 0x44 || memcmp(data + 0x40, "7621", 4))) {
 			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "MT7621 U-Boot marker not found");
+				 "not MT7621 U-Boot");
 			ret = -ENOEXEC;
 		} else {
 			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "exact-size raw %s partition image accepted",
+				 "raw %s accepted",
 				 part->name);
 		}
 	}
@@ -659,7 +729,7 @@ static int webflash_validate_upload(struct webflash_ctx *ctx)
 
 protected_error:
 	snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-		 "raw %s image is empty or invalid", part->name);
+		 "raw %s invalid", part->name);
 out:
 	unmap_sysmem(data);
 	ctx->upload_valid = !ret;
@@ -673,7 +743,7 @@ static int webflash_prepare_upload(struct webflash_ctx *ctx,
 	int ret;
 
 	if (webflash_operation_blocked(ctx)) {
-		webflash_error(ctx, "409 Conflict", "device is flashing or rebooting");
+		webflash_error(ctx, "409 Conflict", "device busy");
 		return -EBUSY;
 	}
 	ret = webflash_get_content_length(ctx, &size);
@@ -684,11 +754,11 @@ static int webflash_prepare_upload(struct webflash_ctx *ctx,
 	if (ret || !size || size > part->size ||
 	    ((part->flags & WEBFLASH_PART_PROTECTED) && size != part->size)) {
 		webflash_error(ctx, "413 Content Too Large",
-			       "upload size does not match the selected partition");
+			       "upload size mismatch");
 		return -EFBIG;
 	}
 	if (!webflash_range_valid(ctx, size)) {
-		webflash_error(ctx, "409 Conflict", "upload does not fit safe RAM");
+		webflash_error(ctx, "409 Conflict", "upload too large");
 		return -ERANGE;
 	}
 
@@ -700,8 +770,6 @@ static int webflash_prepare_upload(struct webflash_ctx *ctx,
 	ctx->upload_valid = false;
 	ctx->upload_detail[0] = '\0';
 	ctx->rx_state = WEBFLASH_RX_UPLOAD;
-	printf("YJRQZ Boot upload: %s, %lu bytes to 0x%08lx\n",
-	       part->name, size, ctx->load_addr);
 	return 0;
 }
 
@@ -730,7 +798,7 @@ static int webflash_store_upload(struct webflash_ctx *ctx, const void *data,
 	if (env_set_hex("fileaddr", ctx->completed_addr) ||
 	    env_set_hex("filesize", ctx->completed_size)) {
 		webflash_error(ctx, "500 Internal Server Error",
-			       "failed to update upload environment");
+			       "update upload env failed");
 		return -EIO;
 	}
 
@@ -846,7 +914,7 @@ static int webflash_env_save(struct webflash_ctx *ctx)
 		return -EIO;
 	}
 
-	return webflash_ok(ctx, "environment saved; reboot to apply network changes");
+	return webflash_ok(ctx, "saved; reboot to apply");
 }
 
 static int webflash_handle_body(struct webflash_ctx *ctx)
@@ -885,7 +953,7 @@ static int webflash_prepare_body(struct webflash_ctx *ctx,
 	int ret = webflash_get_content_length(ctx, &size);
 
 	if (webflash_operation_blocked(ctx)) {
-		webflash_error(ctx, "409 Conflict", "device is flashing or rebooting");
+		webflash_error(ctx, "409 Conflict", "device busy");
 		return -EBUSY;
 	}
 	if (ret == -ENOENT) {
@@ -907,6 +975,8 @@ static int webflash_prepare_body(struct webflash_ctx *ctx,
 static const char *webflash_expected_confirmation(
 					const struct webflash_partition *part)
 {
+	if (part->flags & WEBFLASH_PART_EEPROM)
+		return "WRITE-EEPROM";
 	if (part->flags & WEBFLASH_PART_UBOOT)
 		return "RESTORE-UBOOT";
 	if (part->flags & WEBFLASH_PART_FACTORY)
@@ -924,28 +994,64 @@ static int webflash_check_confirmation(struct webflash_ctx *ctx,
 	if (webflash_header_value(ctx, "X-Safeboot-Confirm", confirmation,
 				  sizeof(confirmation)) ||
 	    strcmp(confirmation, expected)) {
-		webflash_error(ctx, "403 Forbidden", "confirmation phrase rejected");
+		webflash_error(ctx, "403 Forbidden", "phrase rejected");
 		return -EACCES;
 	}
 
 	return 0;
 }
 
-static void webflash_start_flash_job(struct webflash_ctx *ctx)
+static int webflash_start_flash_job(struct webflash_ctx *ctx)
 {
 	struct webflash_job *job = &ctx->job;
+	const struct webflash_partition *factory;
+	void *source;
+	int ret;
 
 	memset(job, 0, sizeof(*job));
 	job->mode = WEBFLASH_JOB_FLASH;
 	job->phase = WEBFLASH_PHASE_ERASING;
 	job->part = ctx->upload_part;
+	job->source_addr = ctx->completed_addr;
 	job->erase_offset = job->part->offset;
 	job->erase_size = job->part->size;
 	job->write_size = ctx->completed_size;
 	job->source_crc = ctx->upload_crc;
-	printf("YJRQZ Boot flash job: %s offset 0x%x erase 0x%x write 0x%x\n",
-	       job->part->name, job->erase_offset, job->erase_size,
-	       job->write_size);
+	if (ctx->upload_part->flags & WEBFLASH_PART_FIRMWARE) {
+		u32 need = roundup(ctx->completed_size, ctx->flash->sector_size);
+
+		/* Wiping the rootfs_data header makes OpenWrt rebuild the
+		 * overlay on first boot, so only the image plus a small
+		 * margin needs to be erased. */
+		if (ctx->keep_config)
+			job->erase_size = need;
+		else
+			job->erase_size = min_t(u32, job->part->size,
+						need + 2 * ctx->flash->sector_size);
+	}
+
+	if (ctx->upload_part->flags & WEBFLASH_PART_EEPROM) {
+		factory = webflash_partition_find("factory");
+		ret = spi_flash_read(ctx->flash, factory->offset,
+				     CONFIG_WEBFLASH_FACTORY_SIZE, ctx->io_buf);
+		if (ret) {
+			memset(job, 0, sizeof(*job));
+			return ret;
+		}
+		memcpy(ctx->factory_buf, ctx->io_buf, CONFIG_WEBFLASH_FACTORY_SIZE);
+		source = map_sysmem(ctx->completed_addr, WEBFLASH_EEPROM_SIZE);
+		memcpy(ctx->factory_buf + WEBFLASH_EEPROM_OFFSET, source,
+		       WEBFLASH_EEPROM_SIZE);
+		unmap_sysmem(source);
+		job->part = factory;
+		job->source_buffer = ctx->factory_buf;
+		job->erase_offset = factory->offset;
+		job->erase_size = factory->size;
+		job->write_size = factory->size;
+		job->source_crc = crc32(0, ctx->factory_buf, factory->size);
+	}
+
+	return 0;
 }
 
 static void webflash_job_fail(struct webflash_ctx *ctx, const char *operation,
@@ -954,7 +1060,6 @@ static void webflash_job_fail(struct webflash_ctx *ctx, const char *operation,
 	ctx->job.phase = WEBFLASH_PHASE_ERROR;
 	snprintf(ctx->job.error, sizeof(ctx->job.error), "%s failed (%d)",
 		 operation, ret);
-	printf("YJRQZ Boot: %s\n", ctx->job.error);
 }
 
 static void webflash_schedule_reboot(struct webflash_ctx *ctx)
@@ -1010,10 +1115,14 @@ static void webflash_job_step(struct webflash_ctx *ctx)
 	case WEBFLASH_PHASE_WRITING:
 		remaining = job->write_size - job->processed;
 		chunk = webflash_job_chunk(ctx, remaining, false);
-		source = map_sysmem(ctx->completed_addr + job->processed, chunk);
+		if (job->source_buffer)
+			source = (void *)(job->source_buffer + job->processed);
+		else
+			source = map_sysmem(job->source_addr + job->processed, chunk);
 		ret = spi_flash_write(ctx->flash, job->part->offset + job->processed,
 				      chunk, source);
-		unmap_sysmem(source);
+		if (!job->source_buffer)
+			unmap_sysmem(source);
 		if (ret) {
 			webflash_job_fail(ctx, "write", ret);
 			return;
@@ -1044,7 +1153,6 @@ static void webflash_job_step(struct webflash_ctx *ctx)
 			}
 			job->phase = WEBFLASH_PHASE_DONE;
 			webflash_schedule_reboot(ctx);
-			puts("YJRQZ Boot flash and verification complete\n");
 		}
 		break;
 	default:
@@ -1077,18 +1185,22 @@ static int webflash_start_uploaded_flash(struct webflash_ctx *ctx)
 	const char *expected;
 
 	if (webflash_operation_blocked(ctx)) {
-		webflash_error(ctx, "409 Conflict", "device is flashing or rebooting");
+		webflash_error(ctx, "409 Conflict", "device busy");
 		return -EBUSY;
 	}
 	if (!ctx->upload_part || !ctx->upload_valid || !ctx->completed_size) {
-		webflash_error(ctx, "409 Conflict", "no validated upload is ready");
+		webflash_error(ctx, "409 Conflict", "no upload ready");
 		return -EINVAL;
 	}
 	expected = webflash_expected_confirmation(ctx->upload_part);
 	if (webflash_check_confirmation(ctx, expected))
 		return -EACCES;
 
-	webflash_start_flash_job(ctx);
+	if (webflash_start_flash_job(ctx)) {
+		webflash_error(ctx, "500 Internal Server Error",
+			       "prepare EEPROM failed");
+		return -EIO;
+	}
 	snprintf(ctx->reply, sizeof(ctx->reply),
 		 "{\"ok\":true,\"target\":\"%s\",\"phase\":\"erasing\"}",
 		 ctx->upload_part->name);
@@ -1146,7 +1258,7 @@ static int webflash_factory_reset(struct webflash_ctx *ctx)
 	int ret;
 
 	if (webflash_operation_blocked(ctx)) {
-		webflash_error(ctx, "409 Conflict", "device is flashing or rebooting");
+		webflash_error(ctx, "409 Conflict", "device busy");
 		return -EBUSY;
 	}
 	if (webflash_check_confirmation(ctx, "ERASE-SETTINGS"))
@@ -1154,7 +1266,7 @@ static int webflash_factory_reset(struct webflash_ctx *ctx)
 	ret = webflash_find_overlay(ctx, &overlay);
 	if (ret) {
 		webflash_error(ctx, "422 Unprocessable Content",
-			       "OpenWrt rootfs_data boundary was not found");
+			       "rootfs_data not found");
 		return ret;
 	}
 
@@ -1165,8 +1277,6 @@ static int webflash_factory_reset(struct webflash_ctx *ctx)
 	ctx->job.erase_offset = overlay;
 	ctx->job.erase_size = CONFIG_WEBFLASH_FIRMWARE_OFFSET +
 				      CONFIG_WEBFLASH_FIRMWARE_SIZE - overlay;
-	printf("YJRQZ Boot factory reset: erase 0x%x + 0x%x\n", overlay,
-	       ctx->job.erase_size);
 	snprintf(ctx->reply, sizeof(ctx->reply),
 		 "{\"ok\":true,\"phase\":\"erasing\",\"offset\":\"0x%08x\"}",
 		 overlay);
@@ -1220,7 +1330,7 @@ static int webflash_start_download(struct webflash_ctx *ctx, const char *name)
 	err_t err;
 
 	if (webflash_operation_blocked(ctx)) {
-		webflash_error(ctx, "409 Conflict", "backup unavailable while flashing");
+		webflash_error(ctx, "409 Conflict", "busy flashing");
 		return -EBUSY;
 	}
 	if (!strcmp(name, "fullflash")) {
@@ -1275,6 +1385,39 @@ static int webflash_start_download(struct webflash_ctx *ctx, const char *name)
 		return -EIO;
 	}
 	return 0;
+}
+
+static int webflash_eeprom_info(struct webflash_ctx *ctx)
+{
+	char *p = ctx->reply;
+	const u8 *data;
+	u32 i;
+	int remaining = sizeof(ctx->reply);
+
+	if (webflash_operation_blocked(ctx)) {
+		webflash_error(ctx, "409 Conflict", "busy flashing");
+		return -EBUSY;
+	}
+	if (spi_flash_read(ctx->flash,
+			   CONFIG_WEBFLASH_FACTORY_OFFSET + WEBFLASH_EEPROM_OFFSET,
+			   WEBFLASH_EEPROM_SIZE, ctx->io_buf)) {
+		webflash_error(ctx, "500 Internal Server Error", "EEPROM read failed");
+		return -EIO;
+	}
+	data = ctx->io_buf;
+	p += snprintf(p, remaining, "{\"ok\":true,\"size\":%u,\"hex\":\"",
+		      WEBFLASH_EEPROM_SIZE);
+	remaining = sizeof(ctx->reply) - (p - ctx->reply);
+	for (i = 0; i < WEBFLASH_EEPROM_SIZE && remaining > 3; i++) {
+		p += snprintf(p, remaining, "%02x", data[i]);
+		remaining = sizeof(ctx->reply) - (p - ctx->reply);
+	}
+	if (i != WEBFLASH_EEPROM_SIZE || remaining < 3) {
+		webflash_error(ctx, "500 Internal Server Error", "EEPROM too large");
+		return -EOVERFLOW;
+	}
+	snprintf(p, remaining, "\"}");
+	return webflash_reply(ctx, "200 OK", "application/json", ctx->reply);
 }
 
 static int webflash_info(struct webflash_ctx *ctx)
@@ -1338,7 +1481,7 @@ static int webflash_env_info(struct webflash_ctx *ctx)
 static int webflash_env_reset(struct webflash_ctx *ctx)
 {
 	if (webflash_operation_blocked(ctx)) {
-		webflash_error(ctx, "409 Conflict", "device is flashing or rebooting");
+		webflash_error(ctx, "409 Conflict", "device busy");
 		return -EBUSY;
 	}
 	if (webflash_check_confirmation(ctx, "RESET-ENVIRONMENT"))
@@ -1346,20 +1489,16 @@ static int webflash_env_reset(struct webflash_ctx *ctx)
 	env_set_default("Reset by YJRQZ Boot", 0);
 	if (env_save()) {
 		webflash_error(ctx, "500 Internal Server Error",
-			       "failed to save default environment");
+			       "save default env failed");
 		return -EIO;
 	}
-	return webflash_ok(ctx, "default boot environment restored");
+	return webflash_ok(ctx, "default env restored");
 }
 
 static int webflash_handle_headers(struct webflash_ctx *ctx)
 {
 	const struct webflash_partition *part;
 	const char *name;
-	const char *line_end = strstr(ctx->header, "\r\n");
-	int line_len = line_end ? line_end - ctx->header : ctx->header_len;
-
-	printf("YJRQZ Boot request: %.*s\n", line_len, ctx->header);
 
 	if (webflash_path_is(ctx->header, ctx->header_len, "GET", "/") ||
 	    webflash_path_is(ctx->header, ctx->header_len, "GET", "/index.html"))
@@ -1367,6 +1506,8 @@ static int webflash_handle_headers(struct webflash_ctx *ctx)
 				      webflash_index_html);
 	if (webflash_path_is(ctx->header, ctx->header_len, "GET", "/api/info"))
 		return webflash_info(ctx);
+	if (webflash_path_is(ctx->header, ctx->header_len, "GET", "/api/eeprom"))
+		return webflash_eeprom_info(ctx);
 	if (webflash_path_is(ctx->header, ctx->header_len, "GET", "/api/job"))
 		return webflash_job_status(ctx);
 	if (webflash_path_is(ctx->header, ctx->header_len, "GET", "/api/env"))
@@ -1404,11 +1545,39 @@ static int webflash_handle_headers(struct webflash_ctx *ctx)
 	else if (webflash_path_is(ctx->header, ctx->header_len, "POST",
 				  "/api/upload/factory"))
 		part = webflash_partition_find("factory");
+	else if (webflash_path_is(ctx->header, ctx->header_len, "POST",
+				  "/api/upload/eeprom"))
+		part = webflash_partition_find("eeprom");
+	else if (webflash_path_is(ctx->header, ctx->header_len, "POST",
+				  "/api/upload/ram"))
+		part = webflash_partition_find("ram");
 	if (part)
 		return webflash_prepare_upload(ctx, part);
 
-	if (webflash_path_is(ctx->header, ctx->header_len, "POST", "/api/flash"))
+	if (webflash_path_is(ctx->header, ctx->header_len, "POST",
+			     "/api/boot-ram")) {
+		if (webflash_operation_blocked(ctx)) {
+			webflash_error(ctx, "409 Conflict", "device busy");
+			return -EBUSY;
+		}
+		if (!ctx->upload_part || !ctx->upload_valid ||
+		    !(ctx->upload_part->flags & WEBFLASH_PART_RAM)) {
+			webflash_error(ctx, "409 Conflict", "no RAM image ready");
+			return -EINVAL;
+		}
+		ctx->boot_addr = ctx->completed_addr;
+		ctx->boot_start = get_timer(0);
+		ctx->boot_pending = true;
+		return webflash_ok(ctx, "booting RAM image");
+	}
+	if (webflash_path_is(ctx->header, ctx->header_len, "POST", "/api/flash")) {
+		char keep[4];
+
+		if (!webflash_header_value(ctx, "X-Keep-Config", keep,
+					   sizeof(keep)))
+			ctx->keep_config = keep[0] == '1';
 		return webflash_start_uploaded_flash(ctx);
+	}
 	if (webflash_path_is(ctx->header, ctx->header_len, "POST",
 			     "/api/factory-reset"))
 		return webflash_factory_reset(ctx);
@@ -1421,11 +1590,11 @@ static int webflash_handle_headers(struct webflash_ctx *ctx)
 		if (webflash_job_active(ctx) ||
 		    ctx->job.phase == WEBFLASH_PHASE_ERROR) {
 			webflash_error(ctx, "409 Conflict",
-				       "reboot blocked after an incomplete flash operation");
+				       "reboot blocked after failed flash");
 			return -EBUSY;
 		}
 		if (ctx->reboot_pending)
-			return webflash_ok(ctx, "device reboot is already pending");
+			return webflash_ok(ctx, "reboot pending");
 		webflash_schedule_reboot(ctx);
 		return webflash_ok(ctx, "device will reboot shortly");
 	}
@@ -1531,8 +1700,6 @@ static void webflash_tcp_error(void *arg, err_t err)
 	ctx->stream_active = false;
 	ctx->output_pending = false;
 	ctx->close_pending = false;
-	if (err != ERR_ABRT)
-		printf("YJRQZ Boot connection error: %d\n", err);
 }
 
 static err_t webflash_poll(void *arg, struct tcp_pcb *pcb)
@@ -1561,7 +1728,6 @@ static err_t webflash_poll(void *arg, struct tcp_pcb *pcb)
 			return ERR_ABRT;
 	}
 	if (get_timer(ctx->last_activity) > WEBFLASH_IDLE_TIMEOUT_MS) {
-		puts("YJRQZ Boot connection timed out\n");
 		webflash_abort_client(ctx);
 		return ERR_ABRT;
 	}
@@ -1587,6 +1753,7 @@ static err_t webflash_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 	ctx->last_activity = get_timer(0);
 	ctx->rx_state = WEBFLASH_RX_HEADERS;
 	ctx->action = WEBFLASH_ACTION_NONE;
+	ctx->keep_config = false;
 	ctx->client_aborted = false;
 	ctx->reply_pending = 0;
 	ctx->stream_remaining = 0;
@@ -1684,7 +1851,15 @@ static int webflash_init_flash(struct webflash_ctx *ctx)
 		return -EINVAL;
 
 	ctx->io_buf = memalign(ARCH_DMA_MINALIGN, WEBFLASH_IO_SIZE);
-	return ctx->io_buf ? 0 : -ENOMEM;
+	if (!ctx->io_buf)
+		return -ENOMEM;
+	ctx->factory_buf = memalign(ARCH_DMA_MINALIGN, CONFIG_WEBFLASH_FACTORY_SIZE);
+	if (!ctx->factory_buf) {
+		free(ctx->io_buf);
+		ctx->io_buf = NULL;
+		return -ENOMEM;
+	}
+	return 0;
 }
 
 static int do_webflash(struct cmd_tbl *cmdtp, int flag, int argc,
@@ -1728,23 +1903,24 @@ static int do_webflash(struct cmd_tbl *cmdtp, int flag, int argc,
 		goto out_netif;
 
 	printf("%s listening on http://%s/\n", CONFIG_WEBFLASH_PRODUCT_NAME, ip);
-	printf("SPI NOR: %u bytes, erase size: %u bytes\n",
-	       ctx.flash->size, ctx.flash->sector_size);
-	puts("Normal recovery protects U-Boot, environment and factory data.\n");
-	puts("Press Ctrl-C to stop.\n");
 
 	while (!ctrlc()) {
 		net_lwip_rx(udev, netif);
 		if (webflash_job_active(&ctx))
 			webflash_job_step(&ctx);
+		if (ctx.boot_pending &&
+		    get_timer(ctx.boot_start) >= WEBFLASH_BOOT_DELAY_MS) {
+			webflash_abort_client(&ctx);
+			run_commandf("bootm 0x%lx", ctx.boot_addr);
+			ctx.boot_pending = false;
+			puts("YJRQZ Boot: bootm failed\n");
+		}
 		if (ctx.reboot_pending &&
 		    get_timer(ctx.reboot_start) >= WEBFLASH_REBOOT_DELAY_MS) {
-			puts("YJRQZ Boot rebooting\n");
 			reset_cpu();
 		}
 	}
 
-	puts("\nStopping YJRQZ Boot\n");
 	webflash_abort_client(&ctx);
 	if (ctx.listener) {
 		tcp_arg(ctx.listener, NULL);
@@ -1757,6 +1933,7 @@ out_netif:
 out_eth:
 	net_lwip_eth_stop();
 out_free:
+	free(ctx.factory_buf);
 	free(ctx.io_buf);
 	return ret ? CMD_RET_FAILURE : CMD_RET_SUCCESS;
 }

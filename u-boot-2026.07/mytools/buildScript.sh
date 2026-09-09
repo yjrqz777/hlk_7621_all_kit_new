@@ -12,3 +12,9 @@ cp build/u-boot-mt7621.bin /mnt/d/document/github/hlk/SNANDer/flash/u-boot-mt762
 
 .\Droid-MAX_SNANDer\src\snander.exe -S 10M -a 0x000000 -l 0x30000 -e
 
+npm view @deepseek-ai/dsh version --loglevel verbose
+dsh --version
+
+
+ls -l ./build/*.bin
+ls -lh ./build/*.bin

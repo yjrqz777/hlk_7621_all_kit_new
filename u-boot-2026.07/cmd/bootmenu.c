@@ -480,21 +480,21 @@ static void menu_display_statusline(struct menu *m)
 	menu = entry->menu;
 
 	printf(ANSI_CURSOR_POSITION, 1, 1);
-	puts(ANSI_CLEAR_LINE);
+	// puts(ANSI_CLEAR_LINE);
 	printf(ANSI_CURSOR_POSITION, 2, 3);
 	puts("*** U-Boot Boot Menu ***");
 	puts(ANSI_CLEAR_LINE_TO_END);
 	printf(ANSI_CURSOR_POSITION, 3, 1);
-	puts(ANSI_CLEAR_LINE);
+	// puts(ANSI_CLEAR_LINE);
 
 	/* First 3 lines are bootmenu header + 2 empty lines between entries */
 	printf(ANSI_CURSOR_POSITION, menu->count + 5, 1);
-	puts(ANSI_CLEAR_LINE);
+	// puts(ANSI_CLEAR_LINE);
 	printf(ANSI_CURSOR_POSITION, menu->count + 6, 3);
 	puts("Press UP/DOWN to move, ENTER to select, ESC to quit");
 	puts(ANSI_CLEAR_LINE_TO_END);
 	printf(ANSI_CURSOR_POSITION, menu->count + 7, 1);
-	puts(ANSI_CLEAR_LINE);
+	// puts(ANSI_CLEAR_LINE);
 }
 
 static void handle_uefi_bootnext(void)

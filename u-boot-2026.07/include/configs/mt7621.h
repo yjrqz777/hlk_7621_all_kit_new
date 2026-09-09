@@ -22,7 +22,7 @@
 	"bootmenu_0=Boot OpenWrt from SPI Flash=run boot_spi\0"      \
 	"bootmenu_1=WebFlash Recovery=webflash\0"                    \
 	/* Exit is the third internal entry although its shortcut is 0. */ \
-	"bootmenu_default=2\0"                                      \
+	"bootmenu_default=0\0"                                      \
 	"bootcmd=run boot_spi\0"
 
 /* Serial SPL */

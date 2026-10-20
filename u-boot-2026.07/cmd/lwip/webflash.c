@@ -84,6 +84,12 @@ enum webflash_job_phase {
 	WEBFLASH_PHASE_ERROR,
 };
 
+enum webflash_image_kind {
+	WEBFLASH_IMAGE_OPENWRT,		/* fwtool metadata matches this device */
+	WEBFLASH_IMAGE_OPENWRT_OTHER,	/* fwtool metadata for another device */
+	WEBFLASH_IMAGE_FOREIGN,		/* anything else */
+};
+
 struct webflash_partition {
 	const char *name;
 	const char *filename;
@@ -122,6 +128,7 @@ struct webflash_ctx {
 	ulong reply_pending;
 	ulong reboot_start;
 	u32 upload_crc;
+	enum webflash_image_kind image_kind;
 	u32 stream_offset;
 	u32 stream_remaining;
 	const u8 *stream_memory;
@@ -253,6 +260,55 @@ static const struct webflash_partition *webflash_partition_find(const char *name
 	}
 
 	return NULL;
+}
+
+static bool webflash_upload_is_firmware(const struct webflash_ctx *ctx)
+{
+	return ctx->upload_part &&
+	       (ctx->upload_part->flags & WEBFLASH_PART_FIRMWARE);
+}
+
+static const char *webflash_image_name(const struct webflash_ctx *ctx)
+{
+	if (!webflash_upload_is_firmware(ctx))
+		return "raw";
+
+	switch (ctx->image_kind) {
+	case WEBFLASH_IMAGE_OPENWRT:
+		return "openwrt";
+	case WEBFLASH_IMAGE_OPENWRT_OTHER:
+		return "openwrt-other";
+	default:
+		return "foreign";
+	}
+}
+
+static bool webflash_image_warned(const struct webflash_ctx *ctx)
+{
+	return webflash_upload_is_firmware(ctx) &&
+	       ctx->image_kind != WEBFLASH_IMAGE_OPENWRT;
+}
+
+static const char *webflash_expected_confirmation(
+					const struct webflash_ctx *ctx)
+{
+	const struct webflash_partition *part = ctx->upload_part;
+
+	if (part && (part->flags & WEBFLASH_PART_EEPROM))
+		return "WRITE-EEPROM";
+	if (part && (part->flags & WEBFLASH_PART_UBOOT))
+		return "RESTORE-UBOOT";
+	if (part && (part->flags & WEBFLASH_PART_FACTORY))
+		return "RESTORE-FACTORY";
+	if (part && (part->flags & WEBFLASH_PART_ENV))
+		return "RESTORE-ENVIRONMENT";
+	if (webflash_upload_is_firmware(ctx)) {
+		if (ctx->image_kind == WEBFLASH_IMAGE_OPENWRT_OTHER)
+			return "FLASH-OPENWRT-OTHER";
+		if (ctx->image_kind == WEBFLASH_IMAGE_FOREIGN)
+			return "FLASH-FOREIGN";
+	}
+	return "FLASH-FIRMWARE";
 }
 
 static void webflash_detach_client(struct webflash_ctx *ctx)
@@ -585,6 +641,66 @@ static int webflash_validate_fwtool(const u8 *image, u32 image_size,
 	return -ENOENT;
 }
 
+static void webflash_validate_firmware(struct webflash_ctx *ctx, const u8 *data)
+{
+	const struct legacy_img_hdr *header = (const void *)data;
+	char reason[96] = "";
+	int ret;
+
+	/* The firmware partition accepts any image. The checks below only
+	 * classify what was uploaded so the console can warn before writing;
+	 * the write itself is gated by a per-class confirmation phrase. */
+	ctx->image_kind = WEBFLASH_IMAGE_FOREIGN;
+
+	if (ctx->completed_size < sizeof(*header) ||
+	    !image_check_magic(header) || !image_check_hcrc(header)) {
+		snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+			 "not a uImage: no valid legacy image header");
+		return;
+	}
+	if (image_get_image_size(header) > ctx->completed_size) {
+		snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+			 "not a complete uImage");
+		return;
+	}
+	if (!image_check_os(header, IH_OS_LINUX) ||
+	    !image_check_arch(header, IH_ARCH_MIPS) ||
+	    !image_check_type(header, IH_TYPE_KERNEL)) {
+		snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+			 "not a MIPS Linux kernel uImage");
+		return;
+	}
+	if (!image_check_dcrc(header)) {
+		snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+			 "uImage data CRC mismatch");
+		return;
+	}
+
+	ret = webflash_validate_fwtool(data, ctx->completed_size, reason,
+				       sizeof(reason));
+	if (!ret) {
+		ctx->image_kind = WEBFLASH_IMAGE_OPENWRT;
+		snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+			 "OpenWrt image verified for %s",
+			 CONFIG_WEBFLASH_DEVICE_ID);
+		return;
+	}
+	if (ret == -ENOENT) {
+		snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+			 "not an OpenWrt image: no fwtool metadata");
+		return;
+	}
+
+	ctx->image_kind = WEBFLASH_IMAGE_OPENWRT_OTHER;
+	if (ret == -ENODEV)
+		snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+			 "OpenWrt image for another device, not %s",
+			 CONFIG_WEBFLASH_DEVICE_ID);
+	else
+		snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
+			 "OpenWrt metadata rejected: %s", reason);
+}
+
 static bool webflash_buffer_uniform(const u8 *data, u32 size)
 {
 	u8 value = data[0];
@@ -646,49 +762,7 @@ static int webflash_validate_upload(struct webflash_ctx *ctx)
 				 "RAM boot image verified");
 		}
 	} else if (part->flags & WEBFLASH_PART_FIRMWARE) {
-		const struct legacy_img_hdr *header = (const void *)data;
-		u32 legacy_size;
-
-		if (ctx->completed_size < sizeof(*header)) {
-			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "image too small");
-			ret = -EINVAL;
-			goto out;
-		}
-		if (!image_check_magic(header) || !image_check_hcrc(header)) {
-			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "bad uImage header");
-			ret = -EBADMSG;
-			goto out;
-		}
-		legacy_size = image_get_image_size(header);
-		if (legacy_size > ctx->completed_size) {
-			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "truncated uImage payload");
-			ret = -EFBIG;
-			goto out;
-		}
-		if (!image_check_os(header, IH_OS_LINUX) ||
-		    !image_check_arch(header, IH_ARCH_MIPS) ||
-		    !image_check_type(header, IH_TYPE_KERNEL)) {
-			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "not a MIPS kernel image");
-			ret = -ENOEXEC;
-			goto out;
-		}
-		if (!image_check_dcrc(header)) {
-			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "uImage data CRC mismatch");
-			ret = -EBADMSG;
-			goto out;
-		}
-		ret = webflash_validate_fwtool(data, ctx->completed_size,
-					       ctx->upload_detail,
-					       sizeof(ctx->upload_detail));
-		if (!ret)
-			snprintf(ctx->upload_detail, sizeof(ctx->upload_detail),
-				 "image verified for %s",
-				 CONFIG_WEBFLASH_DEVICE_ID);
+		webflash_validate_firmware(ctx, data);
 	} else if (part->flags & WEBFLASH_PART_ENV) {
 		u32 stored_crc;
 		u32 calc_crc;
@@ -764,6 +838,7 @@ static int webflash_prepare_upload(struct webflash_ctx *ctx,
 
 	memset(&ctx->job, 0, sizeof(ctx->job));
 	ctx->upload_part = part;
+	ctx->image_kind = WEBFLASH_IMAGE_FOREIGN;
 	ctx->content_length = size;
 	ctx->upload_size = 0;
 	ctx->completed_size = 0;
@@ -805,9 +880,13 @@ static int webflash_store_upload(struct webflash_ctx *ctx, const void *data,
 	ret = webflash_validate_upload(ctx);
 	snprintf(ctx->reply, sizeof(ctx->reply),
 		 "{\"ok\":%s,\"target\":\"%s\",\"size\":%lu,"
-		 "\"crc32\":\"%08x\",\"detail\":\"%s\"}",
+		 "\"crc32\":\"%08x\",\"image\":\"%s\",\"warning\":%s,"
+		 "\"confirm\":\"%s\",\"detail\":\"%s\"}",
 		 ret ? "false" : "true", ctx->upload_part->name,
-		 ctx->completed_size, ctx->upload_crc, ctx->upload_detail);
+		 ctx->completed_size, ctx->upload_crc,
+		 webflash_image_name(ctx),
+		 webflash_image_warned(ctx) ? "true" : "false",
+		 webflash_expected_confirmation(ctx), ctx->upload_detail);
 	webflash_reply(ctx, ret ? "422 Unprocessable Content" : "200 OK",
 		       "application/json", ctx->reply);
 	return ret;
@@ -970,20 +1049,6 @@ static int webflash_prepare_body(struct webflash_ctx *ctx,
 	ctx->action = action;
 	ctx->rx_state = WEBFLASH_RX_BODY;
 	return 0;
-}
-
-static const char *webflash_expected_confirmation(
-					const struct webflash_partition *part)
-{
-	if (part->flags & WEBFLASH_PART_EEPROM)
-		return "WRITE-EEPROM";
-	if (part->flags & WEBFLASH_PART_UBOOT)
-		return "RESTORE-UBOOT";
-	if (part->flags & WEBFLASH_PART_FACTORY)
-		return "RESTORE-FACTORY";
-	if (part->flags & WEBFLASH_PART_ENV)
-		return "RESTORE-ENVIRONMENT";
-	return "FLASH-FIRMWARE";
 }
 
 static int webflash_check_confirmation(struct webflash_ctx *ctx,
@@ -1192,7 +1257,7 @@ static int webflash_start_uploaded_flash(struct webflash_ctx *ctx)
 		webflash_error(ctx, "409 Conflict", "no upload ready");
 		return -EINVAL;
 	}
-	expected = webflash_expected_confirmation(ctx->upload_part);
+	expected = webflash_expected_confirmation(ctx);
 	if (webflash_check_confirmation(ctx, expected))
 		return -EACCES;
 

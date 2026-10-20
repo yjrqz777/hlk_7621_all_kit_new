@@ -34,17 +34,17 @@
 				</section>
 
 				<section id="firmware" class="view">
-					<div class="title"><div><h1>固件更新</h1><p>仅接受 hlk-7621a-evb 的 sysupgrade 镜像</p></div></div>
+					<div class="title"><div><h1>固件更新</h1><p>支持任意镜像；非 OpenWrt 镜像会在写入前告警并要求再次确认</p></div></div>
 					<div class="panel">
 						<h2>上传验证</h2>
-						<div class="fileline"><input id="firmwareFile" type="file" accept=".bin"><button id="firmwareUpload">上传镜像</button></div>
+						<div class="fileline"><input id="firmwareFile" type="file"><button id="firmwareUpload">上传镜像</button></div>
 						<progress id="firmwareProgress" value="0" max="100"></progress>
 						<div id="firmwareStatus" class="status">未选择固件。</div>
 					</div>
 					<div class="panel danger-zone">
 						<h2>写入 firmware</h2>
 						<p>擦除、写入并回读校验，成功后自动重启。</p>
-						<label class="keep"><input id="keepConfig" type="checkbox">保留旧配置（不擦除 rootfs_data，更快）</label>
+						<label class="keep"><input id="keepConfig" type="checkbox">保留旧配置（仅对 OpenWrt：不擦除 rootfs_data）</label>
 						<button id="firmwareFlash" class="danger" disabled>开始更新</button>
 					</div>
 					<div class="panel">
@@ -115,12 +115,15 @@
 				</section>
 			</main>
 		</div>
+		<div id="rebootNotice" class="reboot-notice hidden"><strong>设备正在重启</strong><span id="rebootNote"></span></div>
 		<footer>YJRQZ Boot</footer>
 		<script>
 		(function () {
 			'use strict';
 			var info;
 			var firmwareReady = false;
+			var firmwareConfirm = 'FLASH-FIRMWARE';
+			var firmwareWarning = '';
 			var rawReady = false;
 			var jobTimer;
 			var phaseNames = {idle:'等待',erasing:'擦除中',writing:'写入中',verifying:'校验中',done:'完成，即将重启',error:'失败'};
@@ -192,9 +195,31 @@
 				el('jobPhase').textContent = phase;
 				el('jobPercent').textContent = data.progress + '%';
 				el('jobProgress').value = data.progress;
-				el('jobDetail').textContent = data.error || (target ? '目标：' + target : '');
+				if (data.phase === 'done' && data.reboot_pending) el('jobDetail').textContent = '操作完成，设备正在重启，本页面连接即将断开。';
+				else el('jobDetail').textContent = data.error || (target ? '目标：' + target : '');
 				el('eepromProgress').value = data.progress;
 				status(el('eepromStatus'), data.error || (phase + ' · ' + data.progress + '%'), data.error ? 'bad' : 'busy');
+			}
+
+			var rebootTimer;
+			var rebootNotified = false;
+
+			function notifyReboot(seconds, reason) {
+				var left = seconds;
+
+				clearInterval(rebootTimer);
+				el('rebootNotice').className = 'reboot-notice';
+				function tick() {
+					if (left > 0) {
+						el('rebootNote').textContent = reason + '，设备将在 ' + left + ' 秒后重启。';
+					} else {
+						el('rebootNote').textContent = '设备已重启，请等待启动完成后刷新本页面重新连接。';
+						clearInterval(rebootTimer);
+					}
+					left--;
+				}
+				tick();
+				rebootTimer = setInterval(tick, 1000);
 			}
 
 			function trackJob() {
@@ -202,7 +227,14 @@
 				api('/api/job').then(function (data) {
 					showJob(data);
 					if (data.phase === 'error') return;
-					if (data.phase !== 'done') jobTimer = setTimeout(trackJob, 500);
+					if (data.phase === 'done') {
+						if (!rebootNotified && data.reboot_pending) {
+							rebootNotified = true;
+							notifyReboot(5, '操作完成');
+						}
+						return;
+					}
+					jobTimer = setTimeout(trackJob, 500);
 				}).catch(function () {
 					jobTimer = setTimeout(trackJob, 1000);
 				});
@@ -210,6 +242,7 @@
 
 			function startFlash(confirmPhrase, keep) {
 				var h = {'X-Safeboot-Confirm':confirmPhrase};
+				rebootNotified = false;
 				if (keep) h['X-Keep-Config'] = '1';
 				return api('/api/flash', {method:'POST',headers:h}).then(function () { trackJob(); });
 			}
@@ -252,16 +285,25 @@
 				upload('eeprom', blob, el('eepromProgress')).then(function () { return startFlash('WRITE-EEPROM'); }).then(function () { status(el('eepromStatus'), '正在写入并校验 Factory…', 'busy'); }).catch(function (error) { el('eepromWrite').disabled = false; status(el('eepromStatus'), error.message, 'bad'); });
 			};
 
+			function firmwareWarningText(data) {
+				if (data.image === 'foreign') return '这不是 OpenWrt 镜像，U-Boot 无法验证其内容。';
+				if (data.image === 'openwrt-other') return '这是 OpenWrt 镜像，但目标设备不是 ' + (info && info.device ? info.device : '本机') + '。';
+				return '';
+			}
+
 			el('firmwareUpload').onclick = function () {
 				var file = el('firmwareFile').files[0];
 				firmwareReady = false;
+				firmwareWarning = '';
 				el('firmwareFlash').disabled = true;
-				if (!file) return status(el('firmwareStatus'), '请选择 sysupgrade.bin。', 'bad');
-				status(el('firmwareStatus'), '正在上传…', 'busy');
+				if (!file) return status(el('firmwareStatus'), '请选择要写入的镜像文件。', 'bad');
+				status(el('firmwareStatus'), '正在上传并校验…', 'busy');
 				upload('firmware', file, el('firmwareProgress')).then(function (data) {
 					firmwareReady = true;
+					firmwareConfirm = data.confirm || 'FLASH-FIRMWARE';
+					firmwareWarning = firmwareWarningText(data);
 					el('firmwareFlash').disabled = false;
-					status(el('firmwareStatus'), data.detail + '；CRC32 ' + data.crc32 + '；大小 ' + bytes(data.size), 'ok');
+					status(el('firmwareStatus'), data.detail + '；CRC32 ' + data.crc32 + '；大小 ' + bytes(data.size), firmwareWarning ? 'warn' : 'ok');
 				}).catch(function (error) { status(el('firmwareStatus'), '失败：' + error.message, 'bad'); });
 			};
 
@@ -278,9 +320,12 @@
 			};
 
 			el('firmwareFlash').onclick = function () {
-				if (!firmwareReady || !confirm('即将擦除并重写 firmware 分区，继续？')) return;
+				var message = '即将擦除并重写 firmware 分区，继续？';
+				if (!firmwareReady) return;
+				if (firmwareWarning) message = '⚠ ' + firmwareWarning + '\n\n该镜像没有通过 OpenWrt 设备校验，写入后可能无法启动。\n即将擦除并重写 firmware 分区，确认写入？';
+				if (!confirm(message)) return;
 				this.disabled = true;
-				startFlash('FLASH-FIRMWARE', el('keepConfig').checked).catch(function (error) { status(el('firmwareStatus'), '启动失败：' + error.message, 'bad'); });
+				startFlash(firmwareConfirm, el('keepConfig').checked).catch(function (error) { status(el('firmwareStatus'), '启动失败：' + error.message, 'bad'); });
 			};
 
 			el('rawUpload').onclick = function () {
@@ -325,12 +370,12 @@
 			el('factoryReset').onclick = function () {
 				var phrase = prompt('输入 ERASE-SETTINGS：', '');
 				if (phrase !== 'ERASE-SETTINGS') return;
-				api('/api/factory-reset', {method:'POST',headers:{'X-Safeboot-Confirm':phrase}}).then(function () { selectView('firmware'); trackJob(); }).catch(function (error) { alert(error.message); });
+				api('/api/factory-reset', {method:'POST',headers:{'X-Safeboot-Confirm':phrase}}).then(function () { rebootNotified = false; selectView('firmware'); trackJob(); }).catch(function (error) { alert(error.message); });
 			};
 
 			el('reboot').onclick = function () {
 				if (!confirm('立即重启？')) return;
-				api('/api/reboot', {method:'POST'}).then(function () { el('online').textContent = '重启中'; });
+				api('/api/reboot', {method:'POST'}).then(function () { el('online').textContent = '重启中'; notifyReboot(5, '已下发重启命令'); });
 			};
 
 			loadInfo();

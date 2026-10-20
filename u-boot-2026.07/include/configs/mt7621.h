@@ -19,7 +19,7 @@
 	"button_cmd_0_name=recovery\0"                              \
 	"button_cmd_0=webflash\0"                                   \
 	"boot_spi=sf probe 0; sf read 0x82000000 0x50000 0x400000; bootm 0x82000000\0" \
-	"bootmenu_0=Boot OpenWrt from SPI Flash=run boot_spi\0"      \
+	"bootmenu_0=Boot from SPI Flash=run boot_spi\0"              \
 	"bootmenu_1=WebFlash Recovery=webflash\0"                    \
 	/* Exit is the third internal entry although its shortcut is 0. */ \
 	"bootmenu_default=0\0"                                      \

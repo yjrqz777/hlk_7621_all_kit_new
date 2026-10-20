@@ -35,7 +35,7 @@ Press UP/DOWN to move, ENTER to select, ESC to quit
 ```text
 *** U-Boot Boot Menu ***
 
-  0. Boot OpenWrt from SPI Flash
+  0. Boot from SPI Flash
   1. WebFlash Recovery
   2. Exit
 ```
@@ -76,7 +76,7 @@ U-Boot 可以先把 Flash 中前 4 MiB 内容读到 `0x82000000`，再交给 `bo
 
 ```text
 setenv boot_spi 'sf probe 0; sf read 0x82000000 0x50000 0x400000; bootm 0x82000000'
-setenv bootmenu_0 'Boot OpenWrt from SPI Flash=run boot_spi'
+setenv bootmenu_0 'Boot from SPI Flash=run boot_spi'
 setenv bootmenu_1 'WebFlash Recovery=webflash'
 setenv bootcmd 'run boot_spi'
 setenv bootdelay 5
@@ -137,7 +137,7 @@ include/configs/mt7621.h
 	"button_cmd_0_name=recovery\0"                              \
 	"button_cmd_0=webflash\0"                                   \
 	"boot_spi=sf probe 0; sf read 0x82000000 0x50000 0x400000; bootm 0x82000000\0" \
-	"bootmenu_0=Boot OpenWrt from SPI Flash=run boot_spi\0"      \
+	"bootmenu_0=Boot from SPI Flash=run boot_spi\0"              \
 	"bootmenu_1=WebFlash Recovery=webflash\0"                    \
 	"bootcmd=run boot_spi\0"
 ```
@@ -272,7 +272,7 @@ printenv bootmenu_0 bootcmd bootdelay
 应当得到类似结果：
 
 ```text
-bootmenu_0=Boot OpenWrt from SPI Flash=run boot_spi
+bootmenu_0=Boot from SPI Flash=run boot_spi
 bootcmd=run boot_spi
 bootdelay=5
 ```

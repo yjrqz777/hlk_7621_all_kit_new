@@ -46,6 +46,7 @@
 						<p>擦除、写入并回读校验，成功后自动重启。</p>
 						<label class="keep"><input id="keepConfig" type="checkbox">保留旧配置（仅对 OpenWrt：不擦除 rootfs_data）</label>
 						<button id="firmwareFlash" class="danger" disabled>开始更新</button>
+						<div id="jobBox" class="job hidden"><div class="jobhead"><strong id="jobPhase">等待</strong><span id="jobPercent">0%</span></div><progress id="jobProgress" value="0" max="100"></progress><p id="jobDetail"></p></div>
 					</div>
 					<div class="panel">
 						<h2>RAM 启动（不写 Flash）</h2>
@@ -54,7 +55,6 @@
 						<progress id="ramProgress" value="0" max="100"></progress>
 						<div id="ramStatus" class="status">尚未选择镜像。</div>
 					</div>
-					<div id="jobBox" class="panel job hidden"><div class="jobhead"><strong id="jobPhase">等待</strong><span id="jobPercent">0%</span></div><progress id="jobProgress" value="0" max="100"></progress><p id="jobDetail"></p></div>
 
 				</section>
 
@@ -191,7 +191,7 @@
 
 			function showJob(data) {
 				var target = data.target || '', phase = phaseNames[data.phase] || data.phase;
-				el('jobBox').className = 'panel job';
+				el('jobBox').className = 'job';
 				el('jobPhase').textContent = phase;
 				el('jobPercent').textContent = data.progress + '%';
 				el('jobProgress').value = data.progress;
